@@ -46,6 +46,13 @@ from ...utils import (
     logging,
     replace_return_docstrings,
 )
+from ...weight_predictor import (
+    global_weight_preditor,
+    is_weight_predictor_finetune_enabled,
+    global_attn_prob_threshold,
+    global_mlp_prob_threshold,
+    global_enable_attention_predictor,
+)
 from .configuration_llama import LlamaConfig
 
 
@@ -184,9 +191,10 @@ def apply_rotary_pos_emb(q, k, cos, sin, position_ids=None, unsqueeze_dim=1):
 
 
 class LlamaMLP(nn.Module):
-    def __init__(self, config):
+    def __init__(self, config, layer_idx):
         super().__init__()
         self.config = config
+        self.layer_idx = layer_idx
         self.hidden_size = config.hidden_size
         self.intermediate_size = config.intermediate_size
         self.gate_proj = nn.Linear(self.hidden_size, self.intermediate_size, bias=config.mlp_bias)
@@ -212,7 +220,12 @@ class LlamaMLP(nn.Module):
             ]
             down_proj = sum(down_proj)
         else:
-            down_proj = self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))
+            if global_weight_preditor is not None:
+                x = self.act_fn(self.gate_proj(x)) * self.up_proj(x)
+                global_weight_preditor.predict(self.layer_idx + 1, 6, x, prob_threshold=global_mlp_prob_threshold)
+                down_proj = self.down_proj(global_weight_preditor.apply_pred(self.layer_idx, 6, x))
+            else:
+                down_proj = self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))
 
         return down_proj
 
@@ -367,7 +380,11 @@ class LlamaAttention(nn.Module):
             o_proj_slices = self.o_proj.weight.split(self.hidden_size // self.config.pretraining_tp, dim=1)
             attn_output = sum([F.linear(attn_output[i], o_proj_slices[i]) for i in range(self.config.pretraining_tp)])
         else:
-            attn_output = self.o_proj(attn_output)
+            if global_weight_preditor is not None:
+                global_weight_preditor.predict_heads(self.layer_idx + 1, 3, attn_output, self.head_dim, head_percent=0.5)
+                attn_output = self.o_proj(global_weight_preditor.apply_pred(self.layer_idx, 3, attn_output))
+            else:
+                attn_output = self.o_proj(attn_output)
 
         if not output_attentions:
             attn_weights = None
@@ -674,7 +691,7 @@ class LlamaDecoderLayer(nn.Module):
 
         self.self_attn = LLAMA_ATTENTION_CLASSES[config._attn_implementation](config=config, layer_idx=layer_idx)
 
-        self.mlp = LlamaMLP(config)
+        self.mlp = LlamaMLP(config, layer_idx)
         self.input_layernorm = LlamaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.post_attention_layernorm = LlamaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
 
@@ -877,6 +894,9 @@ class LlamaModel(LlamaPreTrainedModel):
         )
         self.norm = LlamaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.gradient_checkpointing = False
+
+        if global_weight_preditor is not None:
+            self.weight_predictors = nn.ModuleList(global_weight_preditor.get_module_list())
 
         # Initialize weights and apply final processing
         self.post_init()

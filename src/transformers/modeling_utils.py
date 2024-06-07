@@ -570,7 +570,9 @@ def set_initialized_submodules(model, state_dict_keys):
         if loaded_keys.issuperset(module.state_dict()):
             module._is_hf_initialized = True
         else:
-            not_initialized_submodules[module_name] = module
+            #not_initialized_submodules[module_name] = module
+            # NOTE(fucheng): avoid initialize weight predictors.
+            module._is_hf_initialized = True
     return not_initialized_submodules
 
 
