@@ -1076,7 +1076,14 @@ class LlamaModel(LlamaPreTrainedModel):
                 (sequence_length, target_length), fill_value=min_dtype, dtype=dtype, device=device
             )
             if sequence_length != 1:
-                causal_mask = torch.triu(causal_mask, diagonal=1)
+                def _triu_mask(mask, diagonal):
+                    mask = mask.clone()
+                    sequence_length, target_length = mask.size()
+                    for i in range(sequence_length):
+                        mask.data[i, :i+diagonal] = 0
+                    return mask
+                #causal_mask = torch.triu(causal_mask, diagonal=1)
+                causal_mask = _triu_mask(causal_mask, diagonal=1)
             causal_mask *= torch.arange(target_length, device=device) > cache_position.reshape(-1, 1)
             causal_mask = causal_mask[None, None, :, :].expand(input_tensor.shape[0], 1, -1, -1)
             if attention_mask is not None:
