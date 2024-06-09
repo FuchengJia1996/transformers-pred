@@ -64,13 +64,14 @@ class WeightPredictor(object):
     def load(self, weight_dir=None):
         if weight_dir is None:
             weight_dir = os.path.join("checkpoints", "weight-predictors", self.model_name)
-        for ilayer in tqdm(range(1, self.num_layers), desc="Loading"):
+        for ilayer in tqdm(range(1, self.num_layers), desc="Loading predictors..."):
         #for ilayer in range(1, self.num_layers):
             for iweight in range(self.num_weights):
                 weight_path = os.path.join(weight_dir, f"opt-l{ilayer}-w{iweight}.pt")
-                ckpt = torch.load(weight_path, map_location="cpu")
-                predictor_model = self.predictors[ilayer][iweight]
-                predictor_model.load_state_dict(ckpt, strict=True)
+                if os.path.exists(weight_path):
+                    ckpt = torch.load(weight_path, map_location="cpu")
+                    predictor_model = self.predictors[ilayer][iweight]
+                    predictor_model.load_state_dict(ckpt, strict=True)
 
     def to_fp16(self):
         self.dtype = torch.float16
