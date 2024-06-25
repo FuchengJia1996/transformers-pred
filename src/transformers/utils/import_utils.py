@@ -703,7 +703,8 @@ def is_sacremoses_available():
 
 
 def is_apex_available():
-    return _apex_available
+    #return _apex_available
+    return False
 
 
 def is_aqlm_available():
