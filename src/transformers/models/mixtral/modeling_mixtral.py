@@ -1202,6 +1202,7 @@ class MixtralModel(MixtralPreTrainedModel):
         all_self_attns = () if output_attentions else None
         all_router_logits = () if output_router_logits else None
         next_decoder_cache = None
+        pre_router_logits = None
 
         for decoder_layer in self.layers:
             if output_hidden_states:
