@@ -1243,7 +1243,7 @@ class MixtralModel(MixtralPreTrainedModel):
             #if output_router_logits:
             #    all_router_logits += (layer_outputs[-1],)
             pre_router_logits = layer_outputs[-1]
-            all_router_logits += (layer_outputs[-1],)
+            #all_router_logits += (layer_outputs[-1],)
 
         hidden_states = self.norm(hidden_states)
 
