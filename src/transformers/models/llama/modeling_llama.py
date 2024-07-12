@@ -381,7 +381,8 @@ class LlamaAttention(nn.Module):
             attn_output = sum([F.linear(attn_output[i], o_proj_slices[i]) for i in range(self.config.pretraining_tp)])
         else:
             if global_weight_preditor is not None:
-                global_weight_preditor.predict_heads(self.layer_idx + 1, 3, attn_output, self.head_dim, head_percent=0.5)
+                global_weight_preditor.predict(self.layer_idx + 1, 3, attn_output)
+                #global_weight_preditor.predict_heads(self.layer_idx + 1, 3, attn_output, self.head_dim, head_percent=0.5)
                 attn_output = self.o_proj(global_weight_preditor.apply_pred(self.layer_idx, 3, attn_output))
             else:
                 attn_output = self.o_proj(attn_output)
