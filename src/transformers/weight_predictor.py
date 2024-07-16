@@ -144,7 +144,7 @@ class WeightPredictor(object):
         logits = logits[0, -1].sum(dim=-1)
         logit_indices = logits.argsort(dim=-1)
         preds = torch.zeros((1, num_heads, head_dim), dtype=torch.int64, device=self.device)
-        for i in range(int(num_heads * head_percent), num_heads):
+        for i in range(int(num_heads * (1.0 - head_percent)), num_heads):
             ihead = logit_indices[i]
             preds.data[0, ihead] = 1
         preds = preds.reshape(1, num_heads * head_dim)
