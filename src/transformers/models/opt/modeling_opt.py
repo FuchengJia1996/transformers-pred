@@ -40,6 +40,7 @@ from ...utils import (
     logging,
     replace_return_docstrings,
 )
+from ...tensor_saver import global_tensor_saver
 from .configuration_opt import OPTConfig
 
 
@@ -473,8 +474,9 @@ OPT_ATTENTION_CLASSES = {
 
 
 class OPTDecoderLayer(nn.Module):
-    def __init__(self, config: OPTConfig):
+    def __init__(self, config: OPTConfig, layer_idx: int):
         super().__init__()
+        self.layer_idx = layer_idx
         self.embed_dim = config.hidden_size
 
         self.self_attn = OPT_ATTENTION_CLASSES[config._attn_implementation](config=config, is_decoder=True)
@@ -521,6 +523,7 @@ class OPTDecoderLayer(nn.Module):
         if self.do_layer_norm_before:
             hidden_states = self.self_attn_layer_norm(hidden_states)
 
+        global_tensor_saver.save(hidden_states, self.layer_idx, "ai")
         # Self Attention
         hidden_states, self_attn_weights, present_key_value = self.self_attn(
             hidden_states=hidden_states,
@@ -530,7 +533,10 @@ class OPTDecoderLayer(nn.Module):
             output_attentions=output_attentions,
         )
         hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
+        global_tensor_saver.save(hidden_states, self.layer_idx, "ao")
+        global_tensor_saver.save(residual, self.layer_idx, "aor")
         hidden_states = residual + hidden_states
+        global_tensor_saver.save(residual, self.layer_idx, "aorr")
 
         # 350m applies layer norm AFTER attention
         if not self.do_layer_norm_before:
@@ -545,13 +551,17 @@ class OPTDecoderLayer(nn.Module):
         if self.do_layer_norm_before:
             hidden_states = self.final_layer_norm(hidden_states)
 
+        global_tensor_saver.save(hidden_states, self.layer_idx, "mi")
         hidden_states = self.fc1(hidden_states)
         hidden_states = self.activation_fn(hidden_states)
 
         hidden_states = self.fc2(hidden_states)
         hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
 
+        global_tensor_saver.save(hidden_states, self.layer_idx, "mo")
+        global_tensor_saver.save(residual, self.layer_idx, "mor")
         hidden_states = (residual + hidden_states).view(hidden_states_shape)
+        global_tensor_saver.save(residual, self.layer_idx, "morr")
 
         # 350m applies layer norm AFTER attention
         if not self.do_layer_norm_before:
@@ -709,7 +719,7 @@ class OPTDecoder(OPTPreTrainedModel):
         else:
             self.final_layer_norm = None
 
-        self.layers = nn.ModuleList([OPTDecoderLayer(config) for _ in range(config.num_hidden_layers)])
+        self.layers = nn.ModuleList([OPTDecoderLayer(config, i) for i in range(config.num_hidden_layers)])
         self._use_flash_attention_2 = config._attn_implementation == "flash_attention_2"
 
         self.gradient_checkpointing = False
@@ -897,6 +907,8 @@ class OPTDecoder(OPTPreTrainedModel):
 
             if output_attentions:
                 all_self_attns += (layer_outputs[1],)
+
+        global_tensor_saver.add_seq(hidden_states.shape[-2])
 
         if self.final_layer_norm is not None:
             hidden_states = self.final_layer_norm(hidden_states)

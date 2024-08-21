@@ -51,8 +51,11 @@ from ...weight_predictor import (
     is_weight_predictor_finetune_enabled,
     global_attn_prob_threshold,
     global_mlp_prob_threshold,
+    global_attn_sp,
+    global_mlp_sp,
     global_enable_attention_predictor,
 )
+from ...tensor_saver import global_tensor_saver
 from .configuration_llama import LlamaConfig
 
 
@@ -221,9 +224,12 @@ class LlamaMLP(nn.Module):
             down_proj = sum(down_proj)
         else:
             if global_weight_preditor is not None:
-                x = self.act_fn(self.gate_proj(x)) * self.up_proj(x)
-                global_weight_preditor.predict(self.layer_idx + 1, 6, x, prob_threshold=global_mlp_prob_threshold)
-                down_proj = self.down_proj(global_weight_preditor.apply_pred(self.layer_idx, 6, x))
+                pred = global_weight_preditor.predict_with_top_k(self.layer_idx, 4, x, sp=global_mlp_sp)
+                x = self.act_fn(self.gate_proj(global_weight_preditor.apply_pred(self.layer_idx, 4, x, pred))) \
+                    * self.up_proj(global_weight_preditor.apply_pred(self.layer_idx, 5, x, pred))
+                #global_weight_preditor.predict(self.layer_idx + 1, 6, x, prob_threshold=global_mlp_prob_threshold)
+                pred = global_weight_preditor.predict_with_top_k(self.layer_idx, 6, x, sp=global_mlp_sp)
+                down_proj = self.down_proj(global_weight_preditor.apply_pred(self.layer_idx, 6, x, pred))
             else:
                 down_proj = self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))
 
@@ -335,9 +341,15 @@ class LlamaAttention(nn.Module):
             value_states = torch.cat(value_states, dim=-1)
 
         else:
-            query_states = self.q_proj(hidden_states)
-            key_states = self.k_proj(hidden_states)
-            value_states = self.v_proj(hidden_states)
+            if global_weight_preditor is not None:
+                pred = global_weight_preditor.predict_with_top_k(self.layer_idx, 0, hidden_states, sp=global_attn_sp)
+                query_states = self.q_proj(global_weight_preditor.apply_pred(self.layer_idx, 0, hidden_states, pred))
+                key_states = self.k_proj(global_weight_preditor.apply_pred(self.layer_idx, 1, hidden_states, pred))
+                value_states = self.v_proj(global_weight_preditor.apply_pred(self.layer_idx, 2, hidden_states, pred))
+            else:
+                query_states = self.q_proj(hidden_states)
+                key_states = self.k_proj(hidden_states)
+                value_states = self.v_proj(hidden_states)
 
         query_states = query_states.view(bsz, q_len, self.num_heads, self.head_dim).transpose(1, 2)
         key_states = key_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
@@ -382,8 +394,9 @@ class LlamaAttention(nn.Module):
         else:
             if global_weight_preditor is not None:
                 #global_weight_preditor.predict(self.layer_idx + 1, 3, attn_output)
-                global_weight_preditor.predict_heads(self.layer_idx + 1, 3, attn_output, self.head_dim, head_percent=0.8)
-                attn_output = self.o_proj(global_weight_preditor.apply_pred(self.layer_idx, 3, attn_output))
+                #global_weight_preditor.predict_heads(self.layer_idx + 1, 3, attn_output, self.head_dim, head_percent=0.8)
+                pred = global_weight_preditor.predict_with_top_k(self.layer_idx, 3, attn_output, sp=global_attn_sp)
+                attn_output = self.o_proj(global_weight_preditor.apply_pred(self.layer_idx, 3, attn_output, pred))
             else:
                 attn_output = self.o_proj(attn_output)
 
@@ -688,6 +701,7 @@ LLAMA_ATTENTION_CLASSES = {
 class LlamaDecoderLayer(nn.Module):
     def __init__(self, config: LlamaConfig, layer_idx: int):
         super().__init__()
+        self.layer_idx = layer_idx
         self.hidden_size = config.hidden_size
 
         #self.self_attn = LLAMA_ATTENTION_CLASSES[config._attn_implementation](config=config, layer_idx=layer_idx)
@@ -724,6 +738,8 @@ class LlamaDecoderLayer(nn.Module):
         residual = hidden_states
 
         hidden_states = self.input_layernorm(hidden_states)
+        if global_tensor_saver is not None:
+            global_tensor_saver.save(hidden_states, self.layer_idx, "ai")
 
         # Self Attention
         hidden_states, self_attn_weights, present_key_value = self.self_attn(
@@ -735,13 +751,25 @@ class LlamaDecoderLayer(nn.Module):
             use_cache=use_cache,
             cache_position=cache_position,
         )
+        if global_tensor_saver is not None:
+            global_tensor_saver.save(hidden_states, self.layer_idx, "ao")
+            global_tensor_saver.save(residual, self.layer_idx, "aor")
         hidden_states = residual + hidden_states
+        if global_tensor_saver is not None:
+            global_tensor_saver.save(residual, self.layer_idx, "aorr")
 
         # Fully Connected
         residual = hidden_states
         hidden_states = self.post_attention_layernorm(hidden_states)
+        if global_tensor_saver is not None:
+            global_tensor_saver.save(hidden_states, self.layer_idx, "mi")
         hidden_states = self.mlp(hidden_states)
+        if global_tensor_saver is not None:
+            global_tensor_saver.save(hidden_states, self.layer_idx, "mo")
+            global_tensor_saver.save(residual, self.layer_idx, "mor")
         hidden_states = residual + hidden_states
+        if global_tensor_saver is not None:
+            global_tensor_saver.save(residual, self.layer_idx, "morr")
 
         outputs = (hidden_states,)
 
@@ -930,6 +958,8 @@ class LlamaModel(LlamaPreTrainedModel):
         use_cache = use_cache if use_cache is not None else self.config.use_cache
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
+        print("input_ids:", input_ids)
+
         if (input_ids is None) ^ (inputs_embeds is not None):
             raise ValueError(
                 "You cannot specify both input_ids and inputs_embeds at the same time, and must specify either one"
@@ -1002,6 +1032,9 @@ class LlamaModel(LlamaPreTrainedModel):
 
             if output_attentions:
                 all_self_attns += (layer_outputs[1],)
+
+        if global_tensor_saver is not None:
+            global_tensor_saver.add_seq(hidden_states.shape[-2])
 
         hidden_states = self.norm(hidden_states)
 

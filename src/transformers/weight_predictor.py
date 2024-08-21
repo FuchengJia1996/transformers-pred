@@ -48,6 +48,10 @@ def score_to_mask(score, sparsity_ratio):
     return mask
 
 
+def calc_sparsity(inp):
+    return (inp.numel() - inp.count_nonzero()) / inp.numel()
+
+
 class WeightPredictor(object):
     def __init__(self, model_name, dataset_name, dtype=torch.float32, device=torch.device("cuda:0"), D=1024):
         self.model_name = model_name
@@ -64,14 +68,15 @@ class WeightPredictor(object):
             self.predictors.append([])
             self.preds.append([])
             for iweight in range(self.num_weights):
-                    x_size = pred_sizes[iweight][0]
-                    y_size = pred_sizes[iweight][1]
-                    query_layer = torch.nn.Sequential(
-                        torch.nn.Linear(x_size, self.D, bias=None),
-                        torch.nn.Linear(self.D, y_size, bias=None),
-                    ).to(dtype).to(device)
-                    self.predictors[-1].append(query_layer)
-                    self.preds[-1].append(torch.zeros((1, y_size), dtype=torch.int64, device=device))
+                x_size = pred_sizes[iweight][0]
+                y_size = pred_sizes[iweight][1]
+                #query_layer = torch.nn.Sequential(
+                #    torch.nn.Linear(x_size, self.D, bias=None),
+                #    torch.nn.Linear(self.D, y_size, bias=None),
+                #).to(dtype).to(device)
+                query_layer = None
+                self.predictors[-1].append(query_layer)
+                self.preds[-1].append(torch.zeros((1, y_size), dtype=torch.int64, device=device))
 
     def load(self, weight_dir=None):
         if weight_dir is None:
@@ -90,14 +95,16 @@ class WeightPredictor(object):
         for ilayer in range(1, self.num_layers):
             for iweight in range(self.num_weights):
                 predictor_model = self.predictors[ilayer][iweight]
-                self.predictors[ilayer][iweight] = predictor_model.to(torch.float16)
+                if predictor_model is not None:
+                    self.predictors[ilayer][iweight] = predictor_model.to(torch.float16)
 
     def to_bf16(self):
         self.dtype = torch.bfloat16
         for ilayer in range(1, self.num_layers):
             for iweight in range(self.num_weights):
                 predictor_model = self.predictors[ilayer][iweight]
-                self.predictors[ilayer][iweight] = predictor_model.to(torch.bfloat16)
+                if predictor_model is not None:
+                    self.predictors[ilayer][iweight] = predictor_model.to(torch.bfloat16)
 
     def set_requires_grad(self, requires_grad):
         for ilayer in range(1, self.num_layers):
@@ -138,6 +145,26 @@ class WeightPredictor(object):
         self.preds[ilayer][iweight].data = preds.data
         return preds
 
+    def predict_with_top_k(self, ilayer, iweight, x, sp):
+        if ilayer >= self.num_layers:
+            return None
+        if sp <= 0.0 or sp > 1.0:
+            return torch.ones(x.shape, dtype=x.dtype, device=x.device)
+        org_shape = x.shape
+        if len(org_shape) == 3:
+            x = x.reshape((-1, x.shape[-1]))
+        logits = x.abs()
+        thres = logits.sort(dim=-1).values[:, int(logits.shape[-1] * 1.0 * sp)].view(logits.shape[0], 1)
+        preds = logits >= thres
+        preds = preds.reshape(org_shape).to(torch.int64)
+        #if len(org_shape) == 3:
+        #    preds.data[:, 0, :] = 1
+        #if ilayer >= 0:
+        #    preds.data[:, :, :] = 1
+        #print(f"il {ilayer}, iw {iweight}, preds_sp {calc_sparsity(preds)}")
+        #self.preds[ilayer][iweight].data = preds.data
+        return preds
+
     def predict_heads(self, ilayer, iweight, x, head_dim, head_percent=0.5):
         #print(f"Predict: ilayer {ilayer}, iweight {iweight}")
         if ilayer >= self.num_layers:
@@ -165,10 +192,12 @@ class WeightPredictor(object):
             return None
         return self.preds[ilayer][iweight]
 
-    def apply_pred(self, ilayer, iweight, x):
-        if ilayer == 0:
-            return x
-        pred = self.get_pred(ilayer, iweight)
+    def apply_pred(self, ilayer, iweight, x, pred=None):
+        #if ilayer == 0:
+        #    return x
+        if pred is None:
+            pred = self.get_pred(ilayer, iweight)
+        #print(f"il {ilayer}, iw {iweight}, preds_sp {calc_sparsity(pred)}")
         return x * pred.to(x.dtype).to(x.device)
 
     def eval(self, ilayer, iweight, x, y, sparsity_ratio):
@@ -225,6 +254,8 @@ class WeightPredictor(object):
 global_weight_preditor = None
 global_attn_prob_threshold = 0.5
 global_mlp_prob_threshold = 0.5
+global_attn_sp = 0.5
+global_mlp_sp = 0.5
 global_enable_attention_predictor = True
 
 
