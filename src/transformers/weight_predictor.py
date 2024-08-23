@@ -1,6 +1,7 @@
 
 import os
 import torch
+import numpy as np
 from tqdm import tqdm
 
 MODEL_CONFIGS = {
@@ -63,20 +64,34 @@ class WeightPredictor(object):
         self.num_weights = MODEL_CONFIGS[model_name]["num_weights"]
         self.predictors = []
         self.preds = []
+        self.wmetrics = []
         pred_sizes = MODEL_CONFIGS[model_name]["pred_sizes"]
+        self.attn_sp = 0.5
+        self.mlp_sp = 0.5
+        self.w_p = 0.0
+        self.sparsity_accum = [0.0, 0.0]
         for ilayer in range(self.num_layers):
             self.predictors.append([])
             self.preds.append([])
+            self.wmetrics.append([])
             for iweight in range(self.num_weights):
                 x_size = pred_sizes[iweight][0]
                 y_size = pred_sizes[iweight][1]
-                #query_layer = torch.nn.Sequential(
-                #    torch.nn.Linear(x_size, self.D, bias=None),
-                #    torch.nn.Linear(self.D, y_size, bias=None),
-                #).to(dtype).to(device)
-                query_layer = None
+                query_layer = torch.nn.Sequential(
+                    torch.nn.Linear(x_size, self.D, bias=None),
+                    torch.nn.Linear(self.D, y_size, bias=None),
+                ).to(dtype).to(device)
                 self.predictors[-1].append(query_layer)
                 self.preds[-1].append(torch.zeros((1, y_size), dtype=torch.int64, device=device))
+
+                # Load w metrics
+                dir_path = os.environ["PREDICTOR_DATA_DIR"]
+                data_type = "mean"
+                filepath = os.path.join(dir_path, f"ow{data_type}-l{ilayer}w{iweight}.npy")
+                assert os.path.exists(filepath), "Data file not exist: " + filepath
+                wm_arr = np.load(filepath)
+                wm_tensor = torch.from_numpy(wm_arr).to(torch.float32).to(device)
+                self.wmetrics[-1].append(wm_tensor)
 
     def load(self, weight_dir=None):
         if weight_dir is None:
@@ -163,6 +178,44 @@ class WeightPredictor(object):
         #    preds.data[:, :, :] = 1
         #print(f"il {ilayer}, iw {iweight}, preds_sp {calc_sparsity(preds)}")
         #self.preds[ilayer][iweight].data = preds.data
+
+    def score_to_mask(self, x, sp):
+        if len(x.shape) == 2:
+            thres = x.sort(dim=-1).values[:, int(x.shape[-1] * 1.0 * sp)].view(x.shape[0], 1)
+        elif len(x.shape) == 3:
+            thres = x.sort(dim=-1).values[:, :, int(x.shape[-1] * 1.0 * sp)].view(x.shape[0], x.shape[1], 1)
+        else:
+            raise ValueError("Length of x shape must be 2 or 3")
+        mask = x >= thres
+        mask = mask.to(torch.int64)
+        return mask
+
+    def combine_mask(self, x_mask, w_mask):
+        org_shape = x_mask.shape
+        hidden_size = x_mask.shape[-1]
+        x_mask = x_mask.reshape((-1, hidden_size))
+        out_mask = x_mask.clone()
+        nsamples = x_mask.shape[0]
+        for i in range(nsamples):
+            m = x_mask[i] + w_mask[0]
+            m = m > 0
+            m = m.to(torch.int64)
+            out_mask.data[i] = m.data
+        return out_mask.reshape(org_shape)
+
+    def predict_by_x_thres(self, ilayer, iweight, x, sp, w_mask_p=0.0):
+        if ilayer >= self.num_layers:
+            return None
+        x = x.abs()
+        preds = self.score_to_mask(x, sp)
+        if w_mask_p > 0.0:
+            wmetrics = self.wmetrics[ilayer][iweight]
+            w_mask = self.score_to_mask(wmetrics, 1 - w_mask_p)
+            preds = self.combine_mask(preds, w_mask)
+        self.sparsity_accum[0] += calc_sparsity(preds)
+        self.sparsity_accum[1] += 1
+        self.preds[ilayer][iweight].data = preds.data
+        #print(f"il {ilayer}, iw {iweight}, preds_sp {calc_sparsity(preds)}")
         return preds
 
     def predict_heads(self, ilayer, iweight, x, head_dim, head_percent=0.5):
@@ -188,16 +241,21 @@ class WeightPredictor(object):
         return preds
 
     def get_pred(self, ilayer, iweight):
-        if ilayer == 0:
-            return None
+        #if ilayer == 0:
+        #    return None
         return self.preds[ilayer][iweight]
 
     def apply_pred(self, ilayer, iweight, x, pred=None):
         #if ilayer == 0:
         #    return x
+        bs, q_len, hidden_size = x.size()
+        assert bs == 1
+        if q_len > 1:
+            return x
+
         if pred is None:
             pred = self.get_pred(ilayer, iweight)
-        #print(f"il {ilayer}, iw {iweight}, preds_sp {calc_sparsity(pred)}")
+        print(f"il {ilayer}, iw {iweight}, preds_sp {calc_sparsity(pred)}")
         return x * pred.to(x.dtype).to(x.device)
 
     def eval(self, ilayer, iweight, x, y, sparsity_ratio):
@@ -250,12 +308,33 @@ class WeightPredictor(object):
         for param in predictor_model.parameters():
             print(param)
 
+    def get_attn_sp(self):
+        return self.attn_sp
+
+    def get_mlp_sp(self):
+        return self.mlp_sp
+
+    def get_w_p(self):
+        return self.w_p
+
+    def set_sp_config(self, attn_sp, mlp_sp, w_p):
+        self.attn_sp = attn_sp
+        self.mlp_sp = mlp_sp
+        self.w_p = w_p
+
+    def reset_sparsity_accum(self):
+        self.sparsity_accum = [0.0, 0.0]
+
+    def get_avg_sparsity(self):
+        return (self.sparsity_accum[0] * 1.0 / self.sparsity_accum[1]).item()
+
 
 global_weight_preditor = None
 global_attn_prob_threshold = 0.5
 global_mlp_prob_threshold = 0.5
 global_attn_sp = 0.5
-global_mlp_sp = 0.5
+global_mlp_sp = 0.8
+global_w_mask_p = 0.0
 global_enable_attention_predictor = True
 
 
@@ -265,6 +344,10 @@ def is_weight_predictor_enabled():
 
 def is_weight_predictor_finetune_enabled():
     return os.environ["ENABLE_PREDICTOR_FINETUNE"] is not None and os.environ["ENABLE_PREDICTOR_FINETUNE"] == "1"
+
+
+def is_sparse_infer():
+    return os.environ["ENABLE_SPARSE_INFER"] is not None and os.environ["ENABLE_SPARSE_INFER"] == "1"
 
 
 def _init_weight_predictor():

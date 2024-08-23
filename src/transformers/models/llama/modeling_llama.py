@@ -49,10 +49,12 @@ from ...utils import (
 from ...weight_predictor import (
     global_weight_preditor,
     is_weight_predictor_finetune_enabled,
+    is_sparse_infer,
     global_attn_prob_threshold,
     global_mlp_prob_threshold,
     global_attn_sp,
     global_mlp_sp,
+    global_w_mask_p,
     global_enable_attention_predictor,
 )
 from ...tensor_saver import global_tensor_saver
@@ -223,13 +225,58 @@ class LlamaMLP(nn.Module):
             ]
             down_proj = sum(down_proj)
         else:
-            if global_weight_preditor is not None:
-                pred = global_weight_preditor.predict_with_top_k(self.layer_idx, 4, x, sp=global_mlp_sp)
-                x = self.act_fn(self.gate_proj(global_weight_preditor.apply_pred(self.layer_idx, 4, x, pred))) \
-                    * self.up_proj(global_weight_preditor.apply_pred(self.layer_idx, 5, x, pred))
+            down_proj = self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))
+
+        return down_proj
+
+
+class LlamaSparseMLP(nn.Module):
+    def __init__(self, config, layer_idx):
+        super().__init__()
+        self.config = config
+        self.layer_idx = layer_idx
+        self.hidden_size = config.hidden_size
+        self.intermediate_size = config.intermediate_size
+        self.gate_proj = nn.Linear(self.hidden_size, self.intermediate_size, bias=config.mlp_bias)
+        self.up_proj = nn.Linear(self.hidden_size, self.intermediate_size, bias=config.mlp_bias)
+        self.down_proj = nn.Linear(self.intermediate_size, self.hidden_size, bias=config.mlp_bias)
+        self.act_fn = ACT2FN[config.hidden_act]
+
+    def forward(self, x):
+        if self.config.pretraining_tp > 1:
+            slice = self.intermediate_size // self.config.pretraining_tp
+            gate_proj_slices = self.gate_proj.weight.split(slice, dim=0)
+            up_proj_slices = self.up_proj.weight.split(slice, dim=0)
+            down_proj_slices = self.down_proj.weight.split(slice, dim=1)
+
+            gate_proj = torch.cat(
+                [F.linear(x, gate_proj_slices[i]) for i in range(self.config.pretraining_tp)], dim=-1
+            )
+            up_proj = torch.cat([F.linear(x, up_proj_slices[i]) for i in range(self.config.pretraining_tp)], dim=-1)
+
+            intermediate_states = (self.act_fn(gate_proj) * up_proj).split(slice, dim=2)
+            down_proj = [
+                F.linear(intermediate_states[i], down_proj_slices[i]) for i in range(self.config.pretraining_tp)
+            ]
+            down_proj = sum(down_proj)
+        else:
+            if global_weight_preditor is not None and is_sparse_infer():
+                global_weight_preditor.predict_by_x_thres(self.layer_idx, 4, x, global_weight_preditor.get_mlp_sp(), global_weight_preditor.get_w_p())
+                x_gate = self.gate_proj(global_weight_preditor.apply_pred(self.layer_idx, 4, x))
+                if global_tensor_saver is not None:
+                    x_gate_org = self.gate_proj(x)
+                    act_x = self.act_fn(x_gate)
+                    act_x_org = self.act_fn(x_gate_org)
+                    global_tensor_saver.save(x_gate_org - x_gate, self.layer_idx, "err_gate")
+                    global_tensor_saver.save(x_gate, self.layer_idx, "x_gate")
+                    global_tensor_saver.save(x_gate_org, self.layer_idx, "x_gate_org")
+                    global_tensor_saver.save(act_x, self.layer_idx, "act_x")
+                    global_tensor_saver.save(act_x_org, self.layer_idx, "act_x_org")
+                x_up = self.up_proj(global_weight_preditor.apply_pred(self.layer_idx, 4, x))
+                x = self.act_fn(x_gate) * x_up
                 #global_weight_preditor.predict(self.layer_idx + 1, 6, x, prob_threshold=global_mlp_prob_threshold)
-                pred = global_weight_preditor.predict_with_top_k(self.layer_idx, 6, x, sp=global_mlp_sp)
-                down_proj = self.down_proj(global_weight_preditor.apply_pred(self.layer_idx, 6, x, pred))
+                global_weight_preditor.predict_by_x_thres(self.layer_idx, 6, x, global_weight_preditor.get_mlp_sp(), global_weight_preditor.get_w_p())
+                down_proj = self.down_proj(global_weight_preditor.apply_pred(self.layer_idx, 6, x))
             else:
                 down_proj = self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))
 
@@ -392,11 +439,163 @@ class LlamaAttention(nn.Module):
             o_proj_slices = self.o_proj.weight.split(self.hidden_size // self.config.pretraining_tp, dim=1)
             attn_output = sum([F.linear(attn_output[i], o_proj_slices[i]) for i in range(self.config.pretraining_tp)])
         else:
-            if global_weight_preditor is not None:
+            attn_output = self.o_proj(attn_output)
+
+        if not output_attentions:
+            attn_weights = None
+
+        return attn_output, attn_weights, past_key_value
+
+
+class LlamaSparseAttention(nn.Module):
+    """Multi-headed attention from 'Attention Is All You Need' paper"""
+
+    def __init__(self, config: LlamaConfig, layer_idx: Optional[int] = None):
+        super().__init__()
+        self.config = config
+        self.layer_idx = layer_idx
+        if layer_idx is None:
+            logger.warning_once(
+                f"Instantiating {self.__class__.__name__} without passing a `layer_idx` is not recommended and will "
+                "lead to errors during the forward call if caching is used. Please make sure to provide a `layer_idx` "
+                "when creating this class."
+            )
+
+        self.attention_dropout = config.attention_dropout
+        self.hidden_size = config.hidden_size
+        self.num_heads = config.num_attention_heads
+        self.head_dim = self.hidden_size // self.num_heads
+        self.num_key_value_heads = config.num_key_value_heads
+        self.num_key_value_groups = self.num_heads // self.num_key_value_heads
+        self.max_position_embeddings = config.max_position_embeddings
+        self.rope_theta = config.rope_theta
+        self.is_causal = True
+
+        if (self.head_dim * self.num_heads) != self.hidden_size:
+            raise ValueError(
+                f"hidden_size must be divisible by num_heads (got `hidden_size`: {self.hidden_size}"
+                f" and `num_heads`: {self.num_heads})."
+            )
+
+        self.q_proj = nn.Linear(self.hidden_size, self.num_heads * self.head_dim, bias=config.attention_bias)
+        self.k_proj = nn.Linear(self.hidden_size, self.num_key_value_heads * self.head_dim, bias=config.attention_bias)
+        self.v_proj = nn.Linear(self.hidden_size, self.num_key_value_heads * self.head_dim, bias=config.attention_bias)
+        self.o_proj = nn.Linear(self.hidden_size, self.hidden_size, bias=config.attention_bias)
+        self._init_rope()
+
+    def _init_rope(self):
+        if self.config.rope_scaling is None:
+            self.rotary_emb = LlamaRotaryEmbedding(
+                self.head_dim,
+                max_position_embeddings=self.max_position_embeddings,
+                base=self.rope_theta,
+            )
+        else:
+            scaling_type = self.config.rope_scaling["type"]
+            scaling_factor = self.config.rope_scaling["factor"]
+            if scaling_type == "linear":
+                self.rotary_emb = LlamaLinearScalingRotaryEmbedding(
+                    self.head_dim,
+                    max_position_embeddings=self.max_position_embeddings,
+                    scaling_factor=scaling_factor,
+                    base=self.rope_theta,
+                )
+            elif scaling_type == "dynamic":
+                self.rotary_emb = LlamaDynamicNTKScalingRotaryEmbedding(
+                    self.head_dim,
+                    max_position_embeddings=self.max_position_embeddings,
+                    scaling_factor=scaling_factor,
+                    base=self.rope_theta,
+                )
+            else:
+                raise ValueError(f"Unknown RoPE scaling type {scaling_type}")
+
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
+        position_ids: Optional[torch.LongTensor] = None,
+        past_key_value: Optional[Cache] = None,
+        output_attentions: bool = False,
+        use_cache: bool = False,
+        cache_position: Optional[torch.LongTensor] = None,
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
+        bsz, q_len, _ = hidden_states.size()
+
+        if self.config.pretraining_tp > 1:
+            key_value_slicing = (self.num_key_value_heads * self.head_dim) // self.config.pretraining_tp
+            query_slices = self.q_proj.weight.split(
+                (self.num_heads * self.head_dim) // self.config.pretraining_tp, dim=0
+            )
+            key_slices = self.k_proj.weight.split(key_value_slicing, dim=0)
+            value_slices = self.v_proj.weight.split(key_value_slicing, dim=0)
+
+            query_states = [F.linear(hidden_states, query_slices[i]) for i in range(self.config.pretraining_tp)]
+            query_states = torch.cat(query_states, dim=-1)
+
+            key_states = [F.linear(hidden_states, key_slices[i]) for i in range(self.config.pretraining_tp)]
+            key_states = torch.cat(key_states, dim=-1)
+
+            value_states = [F.linear(hidden_states, value_slices[i]) for i in range(self.config.pretraining_tp)]
+            value_states = torch.cat(value_states, dim=-1)
+
+        else:
+            if global_weight_preditor is not None and is_sparse_infer():
+                global_weight_preditor.predict_by_x_thres(self.layer_idx, 0, hidden_states, global_weight_preditor.get_attn_sp(), global_weight_preditor.get_w_p())
+                query_states = self.q_proj(global_weight_preditor.apply_pred(self.layer_idx, 0, hidden_states))
+                key_states = self.k_proj(global_weight_preditor.apply_pred(self.layer_idx, 0, hidden_states))
+                value_states = self.v_proj(global_weight_preditor.apply_pred(self.layer_idx, 0, hidden_states))
+            else:
+                query_states = self.q_proj(hidden_states)
+                key_states = self.k_proj(hidden_states)
+                value_states = self.v_proj(hidden_states)
+
+        query_states = query_states.view(bsz, q_len, self.num_heads, self.head_dim).transpose(1, 2)
+        key_states = key_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
+        value_states = value_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
+
+        cos, sin = self.rotary_emb(value_states, position_ids)
+        query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
+
+        if past_key_value is not None:
+            # sin and cos are specific to RoPE models; cache_position needed for the static cache
+            cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}
+            key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
+
+        key_states = repeat_kv(key_states, self.num_key_value_groups)
+        value_states = repeat_kv(value_states, self.num_key_value_groups)
+
+        attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
+
+        if attention_mask is not None:  # no matter the length, we just slice it
+            causal_mask = attention_mask[:, :, :, : key_states.shape[-2]]
+            attn_weights = attn_weights + causal_mask
+
+        # upcast attention to fp32
+        attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query_states.dtype)
+        attn_weights = nn.functional.dropout(attn_weights, p=self.attention_dropout, training=self.training)
+        attn_output = torch.matmul(attn_weights, value_states)
+
+        if attn_output.size() != (bsz, self.num_heads, q_len, self.head_dim):
+            raise ValueError(
+                f"`attn_output` should be of size {(bsz, self.num_heads, q_len, self.head_dim)}, but is"
+                f" {attn_output.size()}"
+            )
+
+        attn_output = attn_output.transpose(1, 2).contiguous()
+
+        attn_output = attn_output.reshape(bsz, q_len, -1)
+
+        if self.config.pretraining_tp > 1:
+            attn_output = attn_output.split(self.hidden_size // self.config.pretraining_tp, dim=2)
+            o_proj_slices = self.o_proj.weight.split(self.hidden_size // self.config.pretraining_tp, dim=1)
+            attn_output = sum([F.linear(attn_output[i], o_proj_slices[i]) for i in range(self.config.pretraining_tp)])
+        else:
+            if global_weight_preditor is not None and is_sparse_infer():
                 #global_weight_preditor.predict(self.layer_idx + 1, 3, attn_output)
                 #global_weight_preditor.predict_heads(self.layer_idx + 1, 3, attn_output, self.head_dim, head_percent=0.8)
-                pred = global_weight_preditor.predict_with_top_k(self.layer_idx, 3, attn_output, sp=global_attn_sp)
-                attn_output = self.o_proj(global_weight_preditor.apply_pred(self.layer_idx, 3, attn_output, pred))
+                global_weight_preditor.predict_by_x_thres(self.layer_idx, 3, attn_output, global_weight_preditor.get_attn_sp(), global_weight_preditor.get_w_p())
+                attn_output = self.o_proj(global_weight_preditor.apply_pred(self.layer_idx, 3, attn_output))
             else:
                 attn_output = self.o_proj(attn_output)
 
@@ -693,8 +892,8 @@ class LlamaSdpaAttention(LlamaAttention):
 
 LLAMA_ATTENTION_CLASSES = {
     "eager": LlamaAttention,
-    "flash_attention_2": LlamaFlashAttention2,
-    "sdpa": LlamaSdpaAttention,
+    #"flash_attention_2": LlamaFlashAttention2,
+    #"sdpa": LlamaSdpaAttention,
 }
 
 
@@ -705,9 +904,11 @@ class LlamaDecoderLayer(nn.Module):
         self.hidden_size = config.hidden_size
 
         #self.self_attn = LLAMA_ATTENTION_CLASSES[config._attn_implementation](config=config, layer_idx=layer_idx)
-        self.self_attn = LlamaAttention(config=config, layer_idx=layer_idx)
+        #self.self_attn = LlamaAttention(config=config, layer_idx=layer_idx)
+        self.self_attn = LlamaSparseAttention(config=config, layer_idx=layer_idx)
 
-        self.mlp = LlamaMLP(config, layer_idx)
+        #self.mlp = LlamaMLP(config, layer_idx)
+        self.mlp = LlamaSparseMLP(config, layer_idx)
         self.input_layernorm = LlamaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.post_attention_layernorm = LlamaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
 
@@ -739,6 +940,7 @@ class LlamaDecoderLayer(nn.Module):
 
         hidden_states = self.input_layernorm(hidden_states)
         if global_tensor_saver is not None:
+            global_tensor_saver.save(self.input_layernorm.weight, self.layer_idx, "alnw")
             global_tensor_saver.save(hidden_states, self.layer_idx, "ai")
 
         # Self Attention
@@ -762,7 +964,9 @@ class LlamaDecoderLayer(nn.Module):
         residual = hidden_states
         hidden_states = self.post_attention_layernorm(hidden_states)
         if global_tensor_saver is not None:
+            global_tensor_saver.save(self.post_attention_layernorm.weight, self.layer_idx, "mlnw")
             global_tensor_saver.save(hidden_states, self.layer_idx, "mi")
+            global_tensor_saver.save(torch.abs(self.mlp.gate_proj.weight.data).mean(dim=0), self.layer_idx, "mean_w_gate")
         hidden_states = self.mlp(hidden_states)
         if global_tensor_saver is not None:
             global_tensor_saver.save(hidden_states, self.layer_idx, "mo")
@@ -925,7 +1129,9 @@ class LlamaModel(LlamaPreTrainedModel):
         self.norm = LlamaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.gradient_checkpointing = False
 
+        self.global_weight_preditor = None
         if global_weight_preditor is not None:
+            self.global_weight_preditor = global_weight_preditor
             self.weight_predictors = nn.ModuleList(global_weight_preditor.get_module_list())
 
         # Initialize weights and apply final processing
@@ -958,7 +1164,7 @@ class LlamaModel(LlamaPreTrainedModel):
         use_cache = use_cache if use_cache is not None else self.config.use_cache
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
-        print("input_ids:", input_ids)
+        #print("input_ids:", input_ids)
 
         if (input_ids is None) ^ (inputs_embeds is not None):
             raise ValueError(

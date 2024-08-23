@@ -1,5 +1,6 @@
 
 import os
+import torch
 import numpy as np
 
 
@@ -16,13 +17,17 @@ class TensorSaver(object):
         if len(t.shape) == 3:
             num_batch = t.shape[-3]
             assert num_batch == 1
+        if len(t.shape) < 2:
+            t = t.reshape((1, 1, -1))
+        if t.dtype == torch.bfloat16:
+            t = t.to(torch.float16)
         num_tokens = t.shape[-2]
         seq_idx = self.cur_seq_idx
         for i in range(num_tokens):
             filename = f"s{seq_idx}-l{il}-{tn}.npy"
             filepath = os.path.join(save_dir, filename)
             t_arr = t[0, i].cpu().detach().numpy()
-            print(f"Save {filename}")
+            print(f"Save {filename}, shape {t_arr.shape}")
             np.save(filepath, t_arr)
             seq_idx += 1
 
