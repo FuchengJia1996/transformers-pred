@@ -65,9 +65,9 @@ class WeightPredictor(object):
         self.predictors = []
         self.preds = []
         self.wmetrics = []
-        pred_sizes = MODEL_CONFIGS[model_name]["pred_sizes"]
+        self.pred_sizes = MODEL_CONFIGS[model_name]["pred_sizes"]
         self.attn_sp = 0.5
-        self.mlp_sp = 0.5
+        self.mlp_sp = 0.8
         self.w_p = 0.0
         self.sparsity_accum = [0.0, 0.0]
         for ilayer in range(self.num_layers):
@@ -75,12 +75,9 @@ class WeightPredictor(object):
             self.preds.append([])
             self.wmetrics.append([])
             for iweight in range(self.num_weights):
-                x_size = pred_sizes[iweight][0]
-                y_size = pred_sizes[iweight][1]
-                query_layer = torch.nn.Sequential(
-                    torch.nn.Linear(x_size, self.D, bias=None),
-                    torch.nn.Linear(self.D, y_size, bias=None),
-                ).to(dtype).to(device)
+                x_size = self.pred_sizes[iweight][0]
+                y_size = self.pred_sizes[iweight][1]
+                query_layer = None
                 self.predictors[-1].append(query_layer)
                 self.preds[-1].append(torch.zeros((1, y_size), dtype=torch.int64, device=device))
 
@@ -88,10 +85,14 @@ class WeightPredictor(object):
                 dir_path = os.environ["PREDICTOR_DATA_DIR"]
                 data_type = "mean"
                 filepath = os.path.join(dir_path, f"ow{data_type}-l{ilayer}w{iweight}.npy")
-                assert os.path.exists(filepath), "Data file not exist: " + filepath
-                wm_arr = np.load(filepath)
-                wm_tensor = torch.from_numpy(wm_arr).to(torch.float32).to(device)
+                #assert os.path.exists(filepath), "Data file not exist: " + filepath
+                if os.path.exists(filepath):
+                    wm_arr = np.load(filepath)
+                    wm_tensor = torch.from_numpy(wm_arr).to(torch.float32).to(device)
+                else:
+                    wm_tensor = None
                 self.wmetrics[-1].append(wm_tensor)
+        print(f"Init sparsity: attn {self.attn_sp}, mlp {self.mlp_sp}, w {self.w_p}")
 
     def load(self, weight_dir=None):
         if weight_dir is None:
@@ -101,9 +102,15 @@ class WeightPredictor(object):
             for iweight in range(self.num_weights):
                 weight_path = os.path.join(weight_dir, f"opt-l{ilayer}-w{iweight}.pt")
                 if os.path.exists(weight_path):
+                    x_size = self.pred_sizes[iweight][0]
+                    y_size = self.pred_sizes[iweight][1]
+                    query_layer = torch.nn.Sequential(
+                        torch.nn.Linear(x_size, self.D, bias=None),
+                        torch.nn.Linear(self.D, y_size, bias=None),
+                    ).to(self.dtype).to(self.device)
                     ckpt = torch.load(weight_path, map_location="cpu")
-                    predictor_model = self.predictors[ilayer][iweight]
-                    predictor_model.load_state_dict(ckpt, strict=True)
+                    query_layer.load_state_dict(ckpt, strict=True)
+                    self.predictors[ilayer][iweight] = query_layer
 
     def to_fp16(self):
         self.dtype = torch.float16
@@ -249,13 +256,13 @@ class WeightPredictor(object):
         #if ilayer == 0:
         #    return x
         bs, q_len, hidden_size = x.size()
-        assert bs == 1
-        if q_len > 1:
-            return x
+        #assert bs == 1
+        #if q_len > 1:
+        #    return x
 
         if pred is None:
             pred = self.get_pred(ilayer, iweight)
-        print(f"il {ilayer}, iw {iweight}, preds_sp {calc_sparsity(pred)}")
+        #print(f"il {ilayer}, iw {iweight}, preds_sp {calc_sparsity(pred)}")
         return x * pred.to(x.dtype).to(x.device)
 
     def eval(self, ilayer, iweight, x, y, sparsity_ratio):
@@ -373,7 +380,7 @@ def _init_weight_predictor():
     global_weight_preditor = WeightPredictor(
         model_name, dataset_name=dataset_name, dtype=dtype, device=device, D=D
     )
-    global_weight_preditor.load(checkpoint_dir)
+    #global_weight_preditor.load(checkpoint_dir)
     if local_rank != "-1":
         #global_weight_preditor.to_fp16()
         global_weight_preditor.to_bf16()
