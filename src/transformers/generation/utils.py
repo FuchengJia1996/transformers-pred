@@ -2630,6 +2630,12 @@ class GenerationMixin:
             model_inputs = self.prepare_inputs_for_generation(input_ids, **model_kwargs)
 
             # forward pass to get next token
+            #print("input_ids_shape:", model_inputs["input_ids"].shape)
+            import os
+            if model_inputs["input_ids"].shape[-1] > 1:
+                os.environ["ENABLE_SPARSE_INFER"] = "0"
+            else:
+                os.environ["ENABLE_SPARSE_INFER"] = "1"
             outputs = self(
                 **model_inputs,
                 return_dict=True,

@@ -261,8 +261,8 @@ class LlamaSparseMLP(nn.Module):
             down_proj = sum(down_proj)
         else:
             if global_weight_preditor is not None and is_sparse_infer():
-                global_weight_preditor.predict_by_x_thres(self.layer_idx, 4, x, global_weight_preditor.get_mlp_sp(), global_weight_preditor.get_w_p())
-                x_gate = self.gate_proj(global_weight_preditor.apply_pred(self.layer_idx, 4, x))
+                pred = global_weight_preditor.predict_by_x_thres(self.layer_idx, 4, x, global_weight_preditor.get_mlp_sp(), global_weight_preditor.get_w_p())
+                x_gate = self.gate_proj(global_weight_preditor.apply_pred(self.layer_idx, 4, x, pred))
                 if global_tensor_saver is not None:
                     x_gate_org = self.gate_proj(x)
                     act_x = self.act_fn(x_gate)
@@ -272,11 +272,11 @@ class LlamaSparseMLP(nn.Module):
                     global_tensor_saver.save(x_gate_org, self.layer_idx, "x_gate_org")
                     global_tensor_saver.save(act_x, self.layer_idx, "act_x")
                     global_tensor_saver.save(act_x_org, self.layer_idx, "act_x_org")
-                x_up = self.up_proj(global_weight_preditor.apply_pred(self.layer_idx, 4, x))
+                x_up = self.up_proj(global_weight_preditor.apply_pred(self.layer_idx, 4, x, pred))
                 x = self.act_fn(x_gate) * x_up
                 #global_weight_preditor.predict(self.layer_idx + 1, 6, x, prob_threshold=global_mlp_prob_threshold)
-                global_weight_preditor.predict_by_x_thres(self.layer_idx, 6, x, global_weight_preditor.get_mlp_sp(), global_weight_preditor.get_w_p())
-                down_proj = self.down_proj(global_weight_preditor.apply_pred(self.layer_idx, 6, x))
+                pred = global_weight_preditor.predict_by_x_thres(self.layer_idx, 6, x, global_weight_preditor.get_mlp_sp(), global_weight_preditor.get_w_p())
+                down_proj = self.down_proj(global_weight_preditor.apply_pred(self.layer_idx, 6, x, pred))
             else:
                 down_proj = self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))
 
@@ -541,10 +541,10 @@ class LlamaSparseAttention(nn.Module):
 
         else:
             if global_weight_preditor is not None and is_sparse_infer():
-                global_weight_preditor.predict_by_x_thres(self.layer_idx, 0, hidden_states, global_weight_preditor.get_attn_sp(), global_weight_preditor.get_w_p())
-                query_states = self.q_proj(global_weight_preditor.apply_pred(self.layer_idx, 0, hidden_states))
-                key_states = self.k_proj(global_weight_preditor.apply_pred(self.layer_idx, 0, hidden_states))
-                value_states = self.v_proj(global_weight_preditor.apply_pred(self.layer_idx, 0, hidden_states))
+                pred = global_weight_preditor.predict_by_x_thres(self.layer_idx, 0, hidden_states, global_weight_preditor.get_attn_sp(), global_weight_preditor.get_w_p())
+                query_states = self.q_proj(global_weight_preditor.apply_pred(self.layer_idx, 0, hidden_states, pred))
+                key_states = self.k_proj(global_weight_preditor.apply_pred(self.layer_idx, 0, hidden_states, pred))
+                value_states = self.v_proj(global_weight_preditor.apply_pred(self.layer_idx, 0, hidden_states, pred))
             else:
                 query_states = self.q_proj(hidden_states)
                 key_states = self.k_proj(hidden_states)
@@ -569,6 +569,9 @@ class LlamaSparseAttention(nn.Module):
 
         if attention_mask is not None:  # no matter the length, we just slice it
             causal_mask = attention_mask[:, :, :, : key_states.shape[-2]]
+            #print(f"attn_weights {attn_weights.shape}, causal_mask {causal_mask.shape}")
+            #print(f"attention_mask {attention_mask}")
+            #print(f"position_ids {position_ids}")
             attn_weights = attn_weights + causal_mask
 
         # upcast attention to fp32
@@ -594,8 +597,8 @@ class LlamaSparseAttention(nn.Module):
             if global_weight_preditor is not None and is_sparse_infer():
                 #global_weight_preditor.predict(self.layer_idx + 1, 3, attn_output)
                 #global_weight_preditor.predict_heads(self.layer_idx + 1, 3, attn_output, self.head_dim, head_percent=0.8)
-                global_weight_preditor.predict_by_x_thres(self.layer_idx, 3, attn_output, global_weight_preditor.get_attn_sp(), global_weight_preditor.get_w_p())
-                attn_output = self.o_proj(global_weight_preditor.apply_pred(self.layer_idx, 3, attn_output))
+                pred = global_weight_preditor.predict_by_x_thres(self.layer_idx, 3, attn_output, global_weight_preditor.get_attn_sp(), global_weight_preditor.get_w_p())
+                attn_output = self.o_proj(global_weight_preditor.apply_pred(self.layer_idx, 3, attn_output, pred))
             else:
                 attn_output = self.o_proj(attn_output)
 
@@ -1164,6 +1167,7 @@ class LlamaModel(LlamaPreTrainedModel):
         use_cache = use_cache if use_cache is not None else self.config.use_cache
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
+        #print("input_ids_shape:", input_ids.shape)
         #print("input_ids:", input_ids)
 
         if (input_ids is None) ^ (inputs_embeds is not None):

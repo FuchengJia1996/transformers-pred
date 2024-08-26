@@ -221,8 +221,11 @@ class WeightPredictor(object):
             preds = self.combine_mask(preds, w_mask)
         self.sparsity_accum[0] += calc_sparsity(preds)
         self.sparsity_accum[1] += 1
-        self.preds[ilayer][iweight].data = preds.data
+        #self.preds[ilayer][iweight].data = preds.data
         #print(f"il {ilayer}, iw {iweight}, preds_sp {calc_sparsity(preds)}")
+        promt_len = 32
+        if promt_len > 0:
+            preds.data[:, :promt_len, :] = 1
         return preds
 
     def predict_heads(self, ilayer, iweight, x, head_dim, head_percent=0.5):

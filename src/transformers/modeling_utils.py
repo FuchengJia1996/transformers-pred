@@ -1504,6 +1504,9 @@ class PreTrainedModel(nn.Module, ModuleUtilsMixin, GenerationMixin, PushToHubMix
         else:
             config._attn_implementation = "eager"
 
+        if config._attn_implementation != "eager":
+            config._attn_implementation = "eager"
+
         return config
 
     @classmethod
