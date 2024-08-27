@@ -805,7 +805,7 @@ def _load_state_dict_into_meta_model(
         if "beta" in key:
             new_key = key.replace("beta", "bias")
         # NOTE(fucheng): Rename key from gate to pregate for mixtral.
-        if "block_sparse_moe.gate.weight" in key:
+        if "block_sparse_moe.gate.weight" in key and False:
             layer_idx = int(key.split(".")[2])
             if layer_idx > 0:   
                 new_layer_idx = layer_idx - 1
@@ -3923,7 +3923,7 @@ class PreTrainedModel(nn.Module, ModuleUtilsMixin, GenerationMixin, PushToHubMix
             if "gamma" in key:
                 return key.replace("gamma", "weight")
             # NOTE(fucheng): Rename key from gate to pregate for mixtral.
-            if "block_sparse_moe.gate.weight" in key:
+            if "block_sparse_moe.gate.weight" in key and False:
                 layer_idx = int(key.split(".")[2])
                 if layer_idx > 0:   
                     new_layer_idx = layer_idx - 1

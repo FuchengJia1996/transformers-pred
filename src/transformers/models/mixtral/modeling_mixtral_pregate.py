@@ -53,7 +53,6 @@ from ...utils import (
 )
 from ...utils.import_utils import is_torch_fx_available
 from .configuration_mixtral import MixtralConfig
-from ...tensor_saver import global_tensor_saver
 
 
 if is_flash_attn_2_available():
@@ -825,7 +824,8 @@ class MixtralSparseMoeBlock(nn.Module):
         self.top_k = config.num_experts_per_tok
 
         # gating
-        self.gate = nn.Linear(self.hidden_dim, self.num_experts, bias=False)
+        self.gate = nn.Linear(self.hidden_dim, self.num_experts, bias=False) if self.layer_idx == 0 else None
+        self.pre_gate = nn.Linear(self.hidden_dim, self.num_experts, bias=False) if self.layer_idx < self.num_hidden_layers - 1 else None
 
         self.experts = nn.ModuleList([MixtralBlockSparseTop2MLP(config) for _ in range(self.num_experts)])
 
@@ -839,8 +839,12 @@ class MixtralSparseMoeBlock(nn.Module):
             hidden_states *= torch.empty_like(hidden_states).uniform_(1.0 - self.jitter_noise, 1.0 + self.jitter_noise)
         hidden_states = hidden_states.view(-1, hidden_dim)
 
-        # router_logits: (batch * sequence_length, n_experts)
-        router_logits = self.gate(hidden_states)
+        pre_router_logits = None
+        if self.layer_idx < self.num_hidden_layers - 1:
+            pre_router_logits = self.pre_gate(hidden_states)
+        if self.layer_idx == 0:
+            # router_logits: (batch * sequence_length, n_experts)
+            router_logits = self.gate(hidden_states)
 
         routing_weights = F.softmax(router_logits, dim=1, dtype=torch.float)
         routing_weights, selected_experts = torch.topk(routing_weights, self.top_k, dim=-1)
@@ -871,13 +875,12 @@ class MixtralSparseMoeBlock(nn.Module):
             # the `top_x` tensor here.
             final_hidden_states.index_add_(0, top_x, current_hidden_states.to(hidden_states.dtype))
         final_hidden_states = final_hidden_states.reshape(batch_size, sequence_length, hidden_dim)
-        return final_hidden_states, router_logits
+        return final_hidden_states, pre_router_logits
 
 
 class MixtralDecoderLayer(nn.Module):
     def __init__(self, config: MixtralConfig, layer_idx: int, num_hidden_layers: int):
         super().__init__()
-        self.layer_idx = layer_idx
         self.hidden_size = config.hidden_size
 
         self.self_attn = MIXTRAL_ATTENTION_CLASSES[config._attn_implementation](config, layer_idx)
@@ -917,9 +920,6 @@ class MixtralDecoderLayer(nn.Module):
         residual = hidden_states
 
         hidden_states = self.input_layernorm(hidden_states)
-        if global_tensor_saver is not None:
-            global_tensor_saver.save(self.input_layernorm.weight, self.layer_idx, "alnw")
-            global_tensor_saver.save(hidden_states, self.layer_idx, "ai")
 
         # Self Attention
         hidden_states, self_attn_weights, present_key_value = self.self_attn(
@@ -930,27 +930,13 @@ class MixtralDecoderLayer(nn.Module):
             output_attentions=output_attentions,
             use_cache=use_cache,
         )
-        if global_tensor_saver is not None:
-            global_tensor_saver.save(hidden_states, self.layer_idx, "ao")
-            global_tensor_saver.save(residual, self.layer_idx, "aor")
         hidden_states = residual + hidden_states
-        if global_tensor_saver is not None:
-            global_tensor_saver.save(residual, self.layer_idx, "aorr")
 
         # Fully Connected
         residual = hidden_states
         hidden_states = self.post_attention_layernorm(hidden_states)
-        if global_tensor_saver is not None:
-            global_tensor_saver.save(self.post_attention_layernorm.weight, self.layer_idx, "mlnw")
-            global_tensor_saver.save(hidden_states, self.layer_idx, "mi")
-            #global_tensor_saver.save(torch.abs(self.mlp.gate_proj.weight.data).mean(dim=0), self.layer_idx, "mean_w_gate")
-        hidden_states, router_logits = self.block_sparse_moe(hidden_states, router_logits)
-        if global_tensor_saver is not None:
-            global_tensor_saver.save(hidden_states, self.layer_idx, "mo")
-            global_tensor_saver.save(residual, self.layer_idx, "mor")
+        hidden_states, pre_router_logits = self.block_sparse_moe(hidden_states, router_logits)
         hidden_states = residual + hidden_states
-        if global_tensor_saver is not None:
-            global_tensor_saver.save(residual, self.layer_idx, "morr")
 
         outputs = (hidden_states,)
 
@@ -960,8 +946,9 @@ class MixtralDecoderLayer(nn.Module):
         if use_cache:
             outputs += (present_key_value,)
 
-        if output_router_logits:
-            outputs += (router_logits,)
+        #if output_router_logits:
+        #    outputs += (router_logits,)
+        outputs += (pre_router_logits,)
 
         return outputs
 
@@ -1215,6 +1202,7 @@ class MixtralModel(MixtralPreTrainedModel):
         all_self_attns = () if output_attentions else None
         all_router_logits = () if output_router_logits else None
         next_decoder_cache = None
+        pre_router_logits = None
 
         for decoder_layer in self.layers:
             if output_hidden_states:
@@ -1227,7 +1215,7 @@ class MixtralModel(MixtralPreTrainedModel):
                     attention_mask,
                     position_ids,
                     past_key_values,
-                    all_router_logits,
+                    pre_router_logits,
                     output_attentions,
                     output_router_logits,
                     use_cache,
@@ -1238,7 +1226,7 @@ class MixtralModel(MixtralPreTrainedModel):
                     attention_mask=attention_mask,
                     position_ids=position_ids,
                     past_key_value=past_key_values,
-                    router_logits=all_router_logits,
+                    router_logits=pre_router_logits,
                     output_attentions=output_attentions,
                     output_router_logits=output_router_logits,
                     use_cache=use_cache,
@@ -1252,8 +1240,10 @@ class MixtralModel(MixtralPreTrainedModel):
             if output_attentions:
                 all_self_attns += (layer_outputs[1],)
 
-            if output_router_logits:
-                all_router_logits += (layer_outputs[-1],)
+            #if output_router_logits:
+            #    all_router_logits += (layer_outputs[-1],)
+            pre_router_logits = layer_outputs[-1]
+            #all_router_logits += (layer_outputs[-1],)
 
         hidden_states = self.norm(hidden_states)
 

@@ -67,8 +67,8 @@ class WeightPredictor(object):
         self.wmetrics = []
         self.pred_sizes = MODEL_CONFIGS[model_name]["pred_sizes"]
         self.attn_sp = 0.5
-        self.mlp_sp = 0.8
-        self.w_p = 0.0
+        self.mlp_sp = 0.5
+        self.w_p = 2.0
         self.sparsity_accum = [0.0, 0.0]
         for ilayer in range(self.num_layers):
             self.predictors.append([])
@@ -85,7 +85,7 @@ class WeightPredictor(object):
                 dir_path = os.environ["PREDICTOR_DATA_DIR"]
                 data_type = "mean"
                 filepath = os.path.join(dir_path, f"ow{data_type}-l{ilayer}w{iweight}.npy")
-                #assert os.path.exists(filepath), "Data file not exist: " + filepath
+                assert os.path.exists(filepath), "Data file not exist: " + filepath
                 if os.path.exists(filepath):
                     wm_arr = np.load(filepath)
                     wm_tensor = torch.from_numpy(wm_arr).to(torch.float32).to(device)
@@ -210,20 +210,34 @@ class WeightPredictor(object):
             out_mask.data[i] = m.data
         return out_mask.reshape(org_shape)
 
-    def predict_by_x_thres(self, ilayer, iweight, x, sp, w_mask_p=0.0):
+    def combine_mask_v2(self, x_mask, w_mask):
+        org_shape = x_mask.shape
+        hidden_size = x_mask.shape[-1]
+        out_mask = x_mask.clone()
+        nsamples = x_mask.shape[0]
+        m = x_mask + w_mask[0]
+        m = m > 0
+        m = m.to(torch.int64)
+        return m
+
+    def predict_by_x_thres(self, ilayer, iweight, x, sp, w_mask_p=-1.0):
         if ilayer >= self.num_layers:
             return None
         x = x.abs()
         preds = self.score_to_mask(x, sp)
-        if w_mask_p > 0.0:
+        if w_mask_p >= 0.0 and w_mask_p <= 1.0:
+            if w_mask_p > 0.0:
+                wmetrics = self.wmetrics[ilayer][iweight]
+                w_mask = self.score_to_mask(wmetrics, 1 - w_mask_p)
+                preds = self.combine_mask_v2(preds, w_mask)
+        elif w_mask_p == 2.0:
             wmetrics = self.wmetrics[ilayer][iweight]
-            w_mask = self.score_to_mask(wmetrics, 1 - w_mask_p)
-            preds = self.combine_mask(preds, w_mask)
+            preds = self.score_to_mask(x * wmetrics, sp)
         self.sparsity_accum[0] += calc_sparsity(preds)
         self.sparsity_accum[1] += 1
         #self.preds[ilayer][iweight].data = preds.data
         #print(f"il {ilayer}, iw {iweight}, preds_sp {calc_sparsity(preds)}")
-        promt_len = 32
+        promt_len = 0
         if promt_len > 0:
             preds.data[:, :promt_len, :] = 1
         return preds

@@ -38,6 +38,10 @@ class TensorSaver(object):
 global_tensor_saver = None
 
 
+def is_tensor_saver_enabled():
+    return os.environ["ENABLE_TENSOR_SAVER"] is not None and os.environ["ENABLE_TENSOR_SAVER"] == "1"
+
+
 def _init_tensor_saver():
     global global_tensor_saver
     model_name = os.environ["MODEL_NAME"]
@@ -45,4 +49,5 @@ def _init_tensor_saver():
     global_tensor_saver = TensorSaver(model_name, dataset_name)
 
 
-#_init_tensor_saver()
+if is_tensor_saver_enabled():
+    _init_tensor_saver()
