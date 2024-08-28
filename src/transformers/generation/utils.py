@@ -2630,6 +2630,7 @@ class GenerationMixin:
             model_inputs = self.prepare_inputs_for_generation(input_ids, **model_kwargs)
 
             # forward pass to get next token
+            # NOTE(fucheng): Sparsified decoding.
             #print("input_ids_shape:", model_inputs["input_ids"].shape)
             import os
             if model_inputs["input_ids"].shape[-1] > 1:

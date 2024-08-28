@@ -23,6 +23,20 @@ MODEL_CONFIGS = {
             [5120, 5120], [5120, 5120], [5120, 5120], [5120, 5120],
             [5120, 5120], [5120, 5120], [13824, 13824]
         ]},
+    "Mixtral-8x7B-v0.1": {
+        "num_layers": 32, "num_weights": 29,
+        "pred_sizes": [
+            [4096, 4096], [4096, 4096], [4096, 4096], [4096, 4096],
+            [4096, 4096], [4096, 4096], [14336, 14336],
+            [4096, 4096], [4096, 4096], [14336, 14336],
+            [4096, 4096], [4096, 4096], [14336, 14336],
+            [4096, 4096], [4096, 4096], [14336, 14336],
+            [4096, 4096], [4096, 4096], [14336, 14336],
+            [4096, 4096], [4096, 4096], [14336, 14336],
+            [4096, 4096], [4096, 4096], [14336, 14336],
+            [4096, 4096], [4096, 4096], [14336, 14336],
+            [4096, 4096]
+        ]},
     "Llama-2-70b-chat-hf": {
         "num_layers": 80, "num_weights": 7,
         "pred_sizes": [
@@ -89,6 +103,7 @@ class WeightPredictor(object):
                 if os.path.exists(filepath):
                     wm_arr = np.load(filepath)
                     wm_tensor = torch.from_numpy(wm_arr).to(torch.float32).to(device)
+                    #print(f"Load {filepath}, shape {wm_tensor.shape}")
                 else:
                     wm_tensor = None
                 self.wmetrics[-1].append(wm_tensor)
@@ -229,14 +244,18 @@ class WeightPredictor(object):
             if w_mask_p > 0.0:
                 wmetrics = self.wmetrics[ilayer][iweight]
                 w_mask = self.score_to_mask(wmetrics, 1 - w_mask_p)
-                preds = self.combine_mask_v2(preds, w_mask)
+                preds = self.combine_mask_v2(preds, w_mask.to(preds.device))
         elif w_mask_p == 2.0:
+            #print(f"il {ilayer}, iw {iweight}")
             wmetrics = self.wmetrics[ilayer][iweight]
-            preds = self.score_to_mask(x * wmetrics, sp)
-        self.sparsity_accum[0] += calc_sparsity(preds)
-        self.sparsity_accum[1] += 1
+            preds = self.score_to_mask(x * wmetrics.to(x.device), sp)
+        preds_sp = calc_sparsity(preds).item()
+        import math
+        if not math.isnan(preds_sp):
+            self.sparsity_accum[0] += preds_sp
+            self.sparsity_accum[1] += 1
+            #print(f"il {ilayer}, iw {iweight}, preds_sp {preds_sp}")
         #self.preds[ilayer][iweight].data = preds.data
-        #print(f"il {ilayer}, iw {iweight}, preds_sp {calc_sparsity(preds)}")
         promt_len = 0
         if promt_len > 0:
             preds.data[:, :promt_len, :] = 1
@@ -272,7 +291,7 @@ class WeightPredictor(object):
     def apply_pred(self, ilayer, iweight, x, pred=None):
         #if ilayer == 0:
         #    return x
-        bs, q_len, hidden_size = x.size()
+        #bs, q_len, hidden_size = x.size()
         #assert bs == 1
         #if q_len > 1:
         #    return x
@@ -350,7 +369,7 @@ class WeightPredictor(object):
         self.sparsity_accum = [0.0, 0.0]
 
     def get_avg_sparsity(self):
-        return (self.sparsity_accum[0] * 1.0 / self.sparsity_accum[1]).item()
+        return self.sparsity_accum[0] * 1.0 / self.sparsity_accum[1]
 
 
 global_weight_preditor = None

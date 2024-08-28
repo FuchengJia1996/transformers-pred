@@ -51,6 +51,17 @@ from ...utils import (
     logging,
     replace_return_docstrings,
 )
+from ...weight_predictor import (
+    global_weight_preditor,
+    is_weight_predictor_finetune_enabled,
+    is_sparse_infer,
+    global_attn_prob_threshold,
+    global_mlp_prob_threshold,
+    global_attn_sp,
+    global_mlp_sp,
+    global_w_mask_p,
+    global_enable_attention_predictor,
+)
 from ...utils.import_utils import is_torch_fx_available
 from .configuration_mixtral import MixtralConfig
 from ...tensor_saver import global_tensor_saver
@@ -331,9 +342,15 @@ class MixtralAttention(nn.Module):
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
         bsz, q_len, _ = hidden_states.size()
 
-        query_states = self.q_proj(hidden_states)
-        key_states = self.k_proj(hidden_states)
-        value_states = self.v_proj(hidden_states)
+        if global_weight_preditor is not None and is_sparse_infer():
+            pred = global_weight_preditor.predict_by_x_thres(self.layer_idx, 0, hidden_states, global_weight_preditor.get_attn_sp(), global_weight_preditor.get_w_p())
+            query_states = self.q_proj(global_weight_preditor.apply_pred(self.layer_idx, 0, hidden_states, pred))
+            key_states = self.k_proj(global_weight_preditor.apply_pred(self.layer_idx, 0, hidden_states, pred))
+            value_states = self.v_proj(global_weight_preditor.apply_pred(self.layer_idx, 0, hidden_states, pred))
+        else:
+            query_states = self.q_proj(hidden_states)
+            key_states = self.k_proj(hidden_states)
+            value_states = self.v_proj(hidden_states)
 
         query_states = query_states.view(bsz, q_len, self.num_heads, self.head_dim).transpose(1, 2)
         key_states = key_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
@@ -389,7 +406,11 @@ class MixtralAttention(nn.Module):
         attn_output = attn_output.transpose(1, 2).contiguous()
         attn_output = attn_output.reshape(bsz, q_len, self.hidden_size)
 
-        attn_output = self.o_proj(attn_output)
+        if global_weight_preditor is not None and is_sparse_infer():
+            pred = global_weight_preditor.predict_by_x_thres(self.layer_idx, 3, attn_output, global_weight_preditor.get_attn_sp(), global_weight_preditor.get_w_p())
+            attn_output = self.o_proj(global_weight_preditor.apply_pred(self.layer_idx, 3, attn_output, pred))
+        else:
+            attn_output = self.o_proj(attn_output)
 
         if not output_attentions:
             attn_weights = None
@@ -786,8 +807,10 @@ MIXTRAL_ATTENTION_CLASSES = {
 
 
 class MixtralBlockSparseTop2MLP(nn.Module):
-    def __init__(self, config: MixtralConfig):
+    def __init__(self, config: MixtralConfig, layer_idx: Optional[int] = None, expert_idx: Optional[int] = None):
         super().__init__()
+        self.layer_idx = layer_idx
+        self.expert_idx = expert_idx
         self.ffn_dim = config.intermediate_size
         self.hidden_dim = config.hidden_size
 
@@ -798,8 +821,28 @@ class MixtralBlockSparseTop2MLP(nn.Module):
         self.act_fn = ACT2FN[config.hidden_act]
 
     def forward(self, hidden_states):
-        current_hidden_states = self.act_fn(self.w1(hidden_states)) * self.w3(hidden_states)
-        current_hidden_states = self.w2(current_hidden_states)
+        if global_weight_preditor is not None and is_sparse_infer():
+            pred = global_weight_preditor.predict_by_x_thres(
+                self.layer_idx,
+                4 + self.expert_idx * 3,
+                hidden_states,
+                global_weight_preditor.get_mlp_sp(),
+                global_weight_preditor.get_w_p()
+            )
+            x1 = self.w1(global_weight_preditor.apply_pred(self.layer_idx, 4, hidden_states, pred))
+            x3 = self.w3(global_weight_preditor.apply_pred(self.layer_idx, 4, hidden_states, pred))
+            current_hidden_states = self.act_fn(x1) * x3
+            pred = global_weight_preditor.predict_by_x_thres(
+                self.layer_idx,
+                6 + self.expert_idx * 3,
+                current_hidden_states,
+                global_weight_preditor.get_mlp_sp(),
+                global_weight_preditor.get_w_p()
+            )
+            current_hidden_states = self.w2(global_weight_preditor.apply_pred(self.layer_idx, 6, current_hidden_states, pred))
+        else:
+            current_hidden_states = self.act_fn(self.w1(hidden_states)) * self.w3(hidden_states)
+            current_hidden_states = self.w2(current_hidden_states)
         return current_hidden_states
 
 
@@ -827,7 +870,7 @@ class MixtralSparseMoeBlock(nn.Module):
         # gating
         self.gate = nn.Linear(self.hidden_dim, self.num_experts, bias=False)
 
-        self.experts = nn.ModuleList([MixtralBlockSparseTop2MLP(config) for _ in range(self.num_experts)])
+        self.experts = nn.ModuleList([MixtralBlockSparseTop2MLP(config, layer_idx, i) for i in range(self.num_experts)])
 
         # Jitter parameters
         self.jitter_noise = config.router_jitter_noise
@@ -851,6 +894,8 @@ class MixtralSparseMoeBlock(nn.Module):
         # One hot encode the selected experts to create an expert mask
         # this will be used to easily index which expert is going to be sollicitated
         expert_mask = torch.nn.functional.one_hot(selected_experts, num_classes=self.num_experts).permute(2, 1, 0)
+        #print(f"expert_mask_shape {expert_mask.shape}")
+        #print(f"expert_mask {expert_mask}")
 
         final_hidden_states = torch.zeros(
             (batch_size * sequence_length, hidden_dim), dtype=hidden_states.dtype, device=hidden_states.device
@@ -866,6 +911,7 @@ class MixtralSparseMoeBlock(nn.Module):
             # states by `routing_weights` on the corresponding tokens (top-1 and top-2)
             current_state = hidden_states[None, top_x].reshape(-1, hidden_dim)
             current_hidden_states = expert_layer(current_state) * routing_weights[top_x, idx, None]
+            #print(f"e_idx {expert_idx}, idx {idx}, top_x {top_x}, x_shape {current_hidden_states.shape}")
 
             # However `index_add_` only support torch tensors for indexing so we'll use
             # the `top_x` tensor here.
@@ -1104,6 +1150,11 @@ class MixtralModel(MixtralPreTrainedModel):
         self.norm = MixtralRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
 
         self.gradient_checkpointing = False
+
+        self.global_weight_preditor = None
+        if global_weight_preditor is not None:
+            self.global_weight_preditor = global_weight_preditor
+
         # Initialize weights and apply final processing
         self.post_init()
 
