@@ -80,8 +80,8 @@ class WeightPredictor(object):
         self.preds = []
         self.wmetrics = []
         self.pred_sizes = MODEL_CONFIGS[model_name]["pred_sizes"]
-        self.attn_sp = 0.5
-        self.mlp_sp = 0.5
+        self.attn_sp = 0.8
+        self.mlp_sp = 0.8
         self.w_p = 2.0
         self.sparsity_accum = [0.0, 0.0]
         for ilayer in range(self.num_layers):
@@ -369,7 +369,10 @@ class WeightPredictor(object):
         self.sparsity_accum = [0.0, 0.0]
 
     def get_avg_sparsity(self):
-        return self.sparsity_accum[0] * 1.0 / self.sparsity_accum[1]
+        if self.sparsity_accum[1] > 0:
+            return self.sparsity_accum[0] * 1.0 / self.sparsity_accum[1]
+        else:
+            return -1
 
 
 global_weight_preditor = None
