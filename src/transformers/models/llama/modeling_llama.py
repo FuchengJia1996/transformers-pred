@@ -635,6 +635,8 @@ class LlamaSparseAttention(nn.Module):
                 query_states = self.q_proj(global_weight_preditor.apply_pred(self.layer_idx, 0, hidden_states, pred))
                 key_states = self.k_proj(global_weight_preditor.apply_pred(self.layer_idx, 0, hidden_states, pred))
                 value_states = self.v_proj(global_weight_preditor.apply_pred(self.layer_idx, 0, hidden_states, pred))
+                #key_states = self.k_proj(hidden_states)
+                #value_states = self.v_proj(hidden_states)
             else:
                 query_states = self.q_proj(hidden_states)
                 key_states = self.k_proj(hidden_states)

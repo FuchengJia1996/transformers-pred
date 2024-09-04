@@ -5,6 +5,12 @@ import numpy as np
 from tqdm import tqdm
 
 MODEL_CONFIGS = {
+    "Llama-2-7b-hf": {
+        "num_layers": 32, "num_weights": 7,
+        "pred_sizes": [
+            [4096, 4096], [4096, 4096], [4096, 4096], [4096, 4096],
+            [4096, 4096], [4096, 4096], [11008, 11008]
+        ]},
     "Llama-2-7b-chat-hf": {
         "num_layers": 32, "num_weights": 7,
         "pred_sizes": [
@@ -16,6 +22,18 @@ MODEL_CONFIGS = {
         "pred_sizes": [
             [4096, 4096], [4096, 4096], [4096, 4096], [4096, 4096],
             [4096, 4096], [4096, 4096], [14336, 14336]
+        ]},
+    "Meta-Llama-3.1-8B": {
+        "num_layers": 32, "num_weights": 7,
+        "pred_sizes": [
+            [4096, 4096], [4096, 4096], [4096, 4096], [4096, 4096],
+            [4096, 4096], [4096, 4096], [14336, 14336]
+        ]},
+    "Llama-2-13b-hf": {
+        "num_layers": 40, "num_weights": 7,
+        "pred_sizes": [
+            [5120, 5120], [5120, 5120], [5120, 5120], [5120, 5120],
+            [5120, 5120], [5120, 5120], [13824, 13824]
         ]},
     "Llama-2-13b-chat-hf": {
         "num_layers": 40, "num_weights": 7,
@@ -80,9 +98,9 @@ class WeightPredictor(object):
         self.preds = []
         self.wmetrics = []
         self.pred_sizes = MODEL_CONFIGS[model_name]["pred_sizes"]
-        self.attn_sp = 0.8
-        self.mlp_sp = 0.8
-        self.w_p = 2.0
+        self.attn_sp = 0.6
+        self.mlp_sp = 0.6
+        self.w_p = 0.0
         self.sparsity_accum = [0.0, 0.0]
         for ilayer in range(self.num_layers):
             self.predictors.append([])
@@ -102,7 +120,7 @@ class WeightPredictor(object):
                 assert os.path.exists(filepath), "Data file not exist: " + filepath
                 if os.path.exists(filepath):
                     wm_arr = np.load(filepath)
-                    wm_tensor = torch.from_numpy(wm_arr).to(torch.float32).to(device)
+                    wm_tensor = torch.from_numpy(wm_arr).to(torch.float16).to(device)
                     #print(f"Load {filepath}, shape {wm_tensor.shape}")
                 else:
                     wm_tensor = None
