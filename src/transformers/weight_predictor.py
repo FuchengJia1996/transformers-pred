@@ -23,7 +23,19 @@ MODEL_CONFIGS = {
             [4096, 4096], [4096, 4096], [4096, 4096], [4096, 4096],
             [4096, 4096], [4096, 4096], [14336, 14336]
         ]},
+    "Meta-Llama-3-8B-Instruct": {
+        "num_layers": 32, "num_weights": 7,
+        "pred_sizes": [
+            [4096, 4096], [4096, 4096], [4096, 4096], [4096, 4096],
+            [4096, 4096], [4096, 4096], [14336, 14336]
+        ]},
     "Meta-Llama-3.1-8B": {
+        "num_layers": 32, "num_weights": 7,
+        "pred_sizes": [
+            [4096, 4096], [4096, 4096], [4096, 4096], [4096, 4096],
+            [4096, 4096], [4096, 4096], [14336, 14336]
+        ]},
+    "Meta-Llama-3.1-8B-Instruct": {
         "num_layers": 32, "num_weights": 7,
         "pred_sizes": [
             [4096, 4096], [4096, 4096], [4096, 4096], [4096, 4096],
@@ -66,6 +78,12 @@ MODEL_CONFIGS = {
         "pred_sizes": [
             [8192, 8192], [8192, 8192], [8192, 8192], [8192, 8192],
             [8192, 8192], [8192, 8192], [28672, 28672]
+        ]},
+    "Meta-Llama-3-70B-Instruct": {
+        "num_layers": 80, "num_weights": 7,
+        "pred_sizes": [
+            [8192, 8192], [8192, 8192], [8192, 8192], [8192, 8192],
+            [8192, 8192], [8192, 8192], [28672, 28672]
         ]}
 }
 
@@ -98,8 +116,8 @@ class WeightPredictor(object):
         self.preds = []
         self.wmetrics = []
         self.pred_sizes = MODEL_CONFIGS[model_name]["pred_sizes"]
-        self.attn_sp = 0.6
-        self.mlp_sp = 0.6
+        self.attn_sp = 0.7
+        self.mlp_sp = 0.7
         self.w_p = 0.0
         self.sparsity_accum = [0.0, 0.0]
         for ilayer in range(self.num_layers):
@@ -117,7 +135,7 @@ class WeightPredictor(object):
                 dir_path = os.environ["PREDICTOR_DATA_DIR"]
                 data_type = "mean"
                 filepath = os.path.join(dir_path, f"ow{data_type}-l{ilayer}w{iweight}.npy")
-                assert os.path.exists(filepath), "Data file not exist: " + filepath
+                #assert os.path.exists(filepath), "Data file not exist: " + filepath
                 if os.path.exists(filepath):
                     wm_arr = np.load(filepath)
                     wm_tensor = torch.from_numpy(wm_arr).to(torch.float16).to(device)
@@ -165,8 +183,9 @@ class WeightPredictor(object):
         for ilayer in range(1, self.num_layers):
             for iweight in range(self.num_weights):
                 predictor_model = self.predictors[ilayer][iweight]
-                for param in predictor_model.parameters():
-                    param.requires_grad = requires_grad
+                if predictor_model is not None:
+                    for param in predictor_model.parameters():
+                        param.requires_grad = requires_grad
 
     def get_trainable_params(self):
         params = []
