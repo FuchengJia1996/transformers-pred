@@ -16,7 +16,10 @@ MODEL_CONFIGS = {
         "pred_sizes": [
             [4096, 4096], [4096, 4096], [4096, 4096], [4096, 4096],
             [4096, 4096], [4096, 4096], [11008, 11008]
-        ]},
+        ],
+        "attn_inp_prepred_precs": ['0.32', '0.29', '0.89', '0.95', '0.75', '0.95', '0.95', '0.94', '0.94', '0.95', '0.96', '0.95', '0.95', '0.93', '0.94', '0.95', '0.75', '0.93', '0.94', '0.80', '0.92', '0.93', '0.93', '0.93', '0.95', '0.93', '0.94', '0.91', '0.90', '0.86', '0.55'],
+        "mlp_inp_prepred_precs": ['0.32', '0.26', '0.90', '0.97', '0.74', '0.95', '0.95', '0.95', '0.95', '0.95', '0.94', '0.95', '0.93', '0.94', '0.94', '0.92', '0.75', '0.94', '0.95', '0.79', '0.93', '0.93', '0.94', '0.95', '0.92', '0.93', '0.93', '0.90', '0.91', '0.82', '0.44']
+    },
     "Meta-Llama-3-8B": {
         "num_layers": 32, "num_weights": 7,
         "pred_sizes": [
@@ -28,7 +31,10 @@ MODEL_CONFIGS = {
         "pred_sizes": [
             [4096, 4096], [4096, 4096], [4096, 4096], [4096, 4096],
             [4096, 4096], [4096, 4096], [14336, 14336]
-        ]},
+        ],
+        "attn_inp_prepred_precs": ['0.41', '0.45', '0.90', '0.92', '0.92', '0.92', '0.91', '0.91', '0.90', '0.90', '0.86', '0.91', '0.90', '0.90', '0.86', '0.84', '0.91', '0.89', '0.92', '0.90', '0.91', '0.91', '0.92', '0.91', '0.91', '0.89', '0.89', '0.86', '0.82', '0.70', '0.58'],
+        "mlp_inp_prepred_precs": ['0.29', '0.32', '0.94', '0.92', '0.91', '0.90', '0.89', '0.91', '0.90', '0.91', '0.85', '0.91', '0.91', '0.88', '0.88', '0.83', '0.89', '0.88', '0.90', '0.90', '0.90', '0.91', '0.89', '0.91', '0.91', '0.89', '0.88', '0.84', '0.75', '0.70', '0.57']
+    },
     "Meta-Llama-3.1-8B": {
         "num_layers": 32, "num_weights": 7,
         "pred_sizes": [
@@ -40,7 +46,10 @@ MODEL_CONFIGS = {
         "pred_sizes": [
             [4096, 4096], [4096, 4096], [4096, 4096], [4096, 4096],
             [4096, 4096], [4096, 4096], [14336, 14336]
-        ]},
+        ],
+        "attn_inp_prepred_precs": ['0.40', '0.44', '0.86', '0.93', '0.94', '0.92', '0.92', '0.93', '0.91', '0.92', '0.86', '0.92', '0.93', '0.90', '0.90', '0.88', '0.92', '0.90', '0.92', '0.92', '0.94', '0.92', '0.92', '0.93', '0.92', '0.91', '0.91', '0.87', '0.85', '0.71', '0.57'],
+        "mlp_inp_prepred_precs": ['0.30', '0.29', '0.95', '0.93', '0.93', '0.91', '0.91', '0.92', '0.92', '0.92', '0.87', '0.93', '0.94', '0.90', '0.90', '0.85', '0.90', '0.89', '0.90', '0.92', '0.92', '0.94', '0.92', '0.93', '0.91', '0.91', '0.89', '0.85', '0.78', '0.70', '0.55']
+    },
     "Llama-2-13b-hf": {
         "num_layers": 40, "num_weights": 7,
         "pred_sizes": [
@@ -52,7 +61,10 @@ MODEL_CONFIGS = {
         "pred_sizes": [
             [5120, 5120], [5120, 5120], [5120, 5120], [5120, 5120],
             [5120, 5120], [5120, 5120], [13824, 13824]
-        ]},
+        ],
+        "attn_inp_prepred_precs": ['0.28', '0.53', '0.68', '0.26', '0.95', '0.91', '0.90', '0.60', '0.92', '0.94', '0.94', '0.93', '0.93', '0.93', '0.91', '0.91', '0.91', '0.87', '0.94', '0.93', '0.90', '0.80', '0.79', '0.90', '0.93', '0.80', '0.92', '0.93', '0.94', '0.94', '0.92'],
+        "mlp_inp_prepred_precs": ['0.37', '0.56', '0.32', '0.25', '0.95', '0.92', '0.89', '0.60', '0.91', '0.92', '0.93', '0.93', '0.92', '0.93', '0.90', '0.90', '0.91', '0.88', '0.93', '0.93', '0.89', '0.80', '0.78', '0.92', '0.94', '0.81', '0.92', '0.93', '0.93', '0.93', '0.93']
+    },
     "Mixtral-8x7B-v0.1": {
         "num_layers": 32, "num_weights": 29,
         "pred_sizes": [
@@ -120,6 +132,9 @@ class WeightPredictor(object):
         self.mlp_sp = 0.7
         self.w_p = 0.0
         self.sparsity_accum = [0.0, 0.0]
+        self.do_pre_prediction = False
+        self.attn_inp_prepred_precs = MODEL_CONFIGS[model_name]["attn_inp_prepred_precs"]
+        self.mlp_inp_prepred_precs = MODEL_CONFIGS[model_name]["mlp_inp_prepred_precs"]
         for ilayer in range(self.num_layers):
             self.predictors.append([])
             self.preds.append([])
@@ -129,7 +144,8 @@ class WeightPredictor(object):
                 y_size = self.pred_sizes[iweight][1]
                 query_layer = None
                 self.predictors[-1].append(query_layer)
-                self.preds[-1].append(torch.zeros((1, y_size), dtype=torch.int64, device=device))
+                #self.preds[-1].append(torch.zeros((1, y_size), dtype=torch.int64, device=device))
+                self.preds[-1].append(None)
 
                 # Load w metrics
                 dir_path = os.environ["PREDICTOR_DATA_DIR"]
@@ -275,6 +291,13 @@ class WeightPredictor(object):
     def predict_by_x_thres(self, ilayer, iweight, x, sp, w_mask_p=-1.0):
         if ilayer >= self.num_layers:
             return None
+
+        out_preds = None
+        if self.preds[ilayer][iweight] is not None:
+            #print(f"il {ilayer}, iw {iweight}, get_pre_pred")
+            out_preds = self.preds[ilayer][iweight]
+
+        # Prediction.
         x = x.abs()
         preds = self.score_to_mask(x, sp)
         if w_mask_p >= 0.0 and w_mask_p <= 1.0:
@@ -286,6 +309,11 @@ class WeightPredictor(object):
             #print(f"il {ilayer}, iw {iweight}")
             wmetrics = self.wmetrics[ilayer][iweight]
             preds = self.score_to_mask(x * wmetrics.to(x.device), sp)
+
+        if out_preds is None:
+            out_preds = preds
+
+        # Calculate sparsity of prediction.
         preds_sp = calc_sparsity(preds).item()
         import math
         if not math.isnan(preds_sp):
@@ -293,10 +321,25 @@ class WeightPredictor(object):
             self.sparsity_accum[1] += 1
             #print(f"il {ilayer}, iw {iweight}, preds_sp {preds_sp}")
         #self.preds[ilayer][iweight].data = preds.data
+
+        # Preprediction.
+        if self.do_pre_prediction and ilayer < self.num_layers - 1:
+            #if (ilayer > 1 and ilayer < self.num_layers - 1) and (iweight in [0, 1, 2, 4, 5]):
+            #    self.preds[ilayer+1][iweight] = preds
+            prec = 0.0
+            if iweight in [0, 1, 2]:
+                prec = float(self.attn_inp_prepred_precs[ilayer])
+            elif iweight in [4, 5]:
+                prec = float(self.mlp_inp_prepred_precs[ilayer])
+            #print(f"il {ilayer}, iw {iweight}, prec {prec}")
+            if prec > 0.7:
+                #print(f"il {ilayer}, iw {iweight}, pre_pred")
+                self.preds[ilayer+1][iweight] = preds
+
         promt_len = 0
         if promt_len > 0:
-            preds.data[:, :promt_len, :] = 1
-        return preds
+            out_preds.data[:, :promt_len, :] = 1
+        return out_preds
 
     def predict_heads(self, ilayer, iweight, x, head_dim, head_percent=0.5):
         #print(f"Predict: ilayer {ilayer}, iweight {iweight}")
@@ -326,8 +369,8 @@ class WeightPredictor(object):
         return self.preds[ilayer][iweight]
 
     def apply_pred(self, ilayer, iweight, x, pred=None):
-        #if ilayer == 0:
-        #    return x
+        if ilayer < 0:
+            return x
         #bs, q_len, hidden_size = x.size()
         #assert bs == 1
         #if q_len > 1:
@@ -401,6 +444,11 @@ class WeightPredictor(object):
         self.attn_sp = attn_sp
         self.mlp_sp = mlp_sp
         self.w_p = w_p
+        print(f"Set sparsity: attn {self.attn_sp}, mlp {self.mlp_sp}, w {self.w_p}")
+
+    def set_do_pre_prediction(self, do_pre_prediction):
+        self.do_pre_prediction = do_pre_prediction
+        print(f"Set pre-prediction: {self.do_pre_prediction}")
 
     def reset_sparsity_accum(self):
         self.sparsity_accum = [0.0, 0.0]

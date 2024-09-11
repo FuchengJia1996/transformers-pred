@@ -352,7 +352,7 @@ class LlamaSparseMLP(nn.Module):
             if global_weight_preditor is not None and is_sparse_infer():
                 pred = global_weight_preditor.predict_by_x_thres(self.layer_idx, 4, x, global_weight_preditor.get_mlp_sp(), global_weight_preditor.get_w_p())
                 x_gate = self.gate_proj(global_weight_preditor.apply_pred(self.layer_idx, 4, x, pred))
-                if global_tensor_saver is not None:
+                if global_tensor_saver is not None and False:
                     x_gate_org = self.gate_proj(x)
                     act_x = self.act_fn(x_gate)
                     act_x_org = self.act_fn(x_gate_org)
@@ -367,7 +367,11 @@ class LlamaSparseMLP(nn.Module):
                 pred = global_weight_preditor.predict_by_x_thres(self.layer_idx, 6, x, global_weight_preditor.get_mlp_sp(), global_weight_preditor.get_w_p())
                 down_proj = self.down_proj(global_weight_preditor.apply_pred(self.layer_idx, 6, x, pred))
             else:
-                down_proj = self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))
+                #down_proj = self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))
+                x = self.act_fn(self.gate_proj(x)) * self.up_proj(x)
+                if global_tensor_saver is not None:
+                    global_tensor_saver.save(x, self.layer_idx, "downi")
+                down_proj = self.down_proj(x)
 
         return down_proj
 
@@ -692,6 +696,8 @@ class LlamaSparseAttention(nn.Module):
                 pred = global_weight_preditor.predict_by_x_thres(self.layer_idx, 3, attn_output, global_weight_preditor.get_attn_sp(), global_weight_preditor.get_w_p())
                 attn_output = self.o_proj(global_weight_preditor.apply_pred(self.layer_idx, 3, attn_output, pred))
             else:
+                if global_tensor_saver is not None:
+                    global_tensor_saver.save(attn_output, self.layer_idx, "attnoi")
                 attn_output = self.o_proj(attn_output)
 
         if not output_attentions:
