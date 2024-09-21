@@ -149,16 +149,14 @@ class WeightPredictor(object):
         self.preds = []
         self.wmetrics = []
         self.pred_sizes = MODEL_CONFIGS[model_name]["pred_sizes"]
-        self.attn_sp = 0.7
-        self.mlp_sp = 0.7
+        self.attn_sp = 0.0
+        self.mlp_sp = 0.0
         self.w_p = 0.0
         self.sparsity_accum = [0.0, 0.0]
-        self.do_pre_prediction = False
+        self.do_pre_prediction = 0
         self.attn_inp_prepred_precs = None
         self.mlp_inp_prepred_precs = None
-        if self.do_pre_prediction:
-            self.attn_inp_prepred_precs = MODEL_CONFIGS[model_name]["attn_inp_prepred_precs"]
-            self.mlp_inp_prepred_precs = MODEL_CONFIGS[model_name]["mlp_inp_prepred_precs"]
+        self.set_do_pre_prediction(self.do_pre_prediction)
         for ilayer in range(self.num_layers):
             self.predictors.append([])
             self.preds.append([])
@@ -472,6 +470,9 @@ class WeightPredictor(object):
 
     def set_do_pre_prediction(self, do_pre_prediction):
         self.do_pre_prediction = do_pre_prediction
+        if self.do_pre_prediction:
+            self.attn_inp_prepred_precs = MODEL_CONFIGS[self.model_name]["attn_inp_prepred_precs"]
+            self.mlp_inp_prepred_precs = MODEL_CONFIGS[self.model_name]["mlp_inp_prepred_precs"]
         print(f"Set pre-prediction: {self.do_pre_prediction}")
 
     def reset_sparsity_accum(self):
