@@ -393,13 +393,14 @@ class WeightPredictor(object):
     def apply_pred(self, ilayer, iweight, x, pred=None):
         if ilayer < 0:
             return x
-        #bs, q_len, hidden_size = x.size()
+        bs, q_len, hidden_size = x.size()
         #assert bs == 1
         #if q_len > 1:
         #    return x
 
         if pred is None:
-            pred = self.get_pred(ilayer, iweight)
+            #pred = self.get_pred(ilayer, iweight)
+            return x
         #print(f"il {ilayer}, iw {iweight}, preds_sp {calc_sparsity(pred)}")
         return x * pred.to(x.dtype).to(x.device)
 

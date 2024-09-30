@@ -351,6 +351,8 @@ class LlamaSparseMLP(nn.Module):
         else:
             if global_weight_preditor is not None and is_sparse_infer():
                 pred = global_weight_preditor.predict_by_x_thres(self.layer_idx, 4, x, global_weight_preditor.get_mlp_sp(), global_weight_preditor.get_w_p())
+                if global_tensor_saver is not None and pred.size()[-2] == 1:
+                    global_tensor_saver.save(pred, self.layer_idx, "mask_gate")
                 x_gate = self.gate_proj(global_weight_preditor.apply_pred(self.layer_idx, 4, x, pred))
                 if global_tensor_saver is not None and False:
                     x_gate_org = self.gate_proj(x)
@@ -636,6 +638,8 @@ class LlamaSparseAttention(nn.Module):
         else:
             if global_weight_preditor is not None and is_sparse_infer():
                 pred = global_weight_preditor.predict_by_x_thres(self.layer_idx, 0, hidden_states, global_weight_preditor.get_attn_sp(), global_weight_preditor.get_w_p())
+                if global_tensor_saver is not None and pred.size()[-2] == 1:
+                    global_tensor_saver.save(pred, self.layer_idx, "mask_qkv")
                 query_states = self.q_proj(global_weight_preditor.apply_pred(self.layer_idx, 0, hidden_states, pred))
                 key_states = self.k_proj(global_weight_preditor.apply_pred(self.layer_idx, 0, hidden_states, pred))
                 value_states = self.v_proj(global_weight_preditor.apply_pred(self.layer_idx, 0, hidden_states, pred))
