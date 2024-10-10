@@ -174,7 +174,7 @@ class WeightPredictor(object):
                 data_type = "mean"
                 filepath = os.path.join(dir_path, f"ow{data_type}-l{ilayer}w{iweight}.npy")
                 #assert os.path.exists(filepath), "Data file not exist: " + filepath
-                if os.path.exists(filepath):
+                if os.path.exists(filepath) and False:
                     wm_arr = np.load(filepath)
                     wm_tensor = torch.from_numpy(wm_arr).to(torch.float16).to(device)
                     #print(f"Load {filepath}, shape {wm_tensor.shape}")
