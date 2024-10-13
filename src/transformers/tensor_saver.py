@@ -11,8 +11,8 @@ class TensorSaver(object):
         self.cur_seq_idx = 0
 
     def save(self, tensor, ilayer, name):
-        if name != "mask_gate":
-            return
+        #if name != "mask_gate":
+        #    return
         save_dir = os.environ["TENSOR_SAVE_DIR"]
         if not os.path.exists(save_dir):
             os.makedirs(save_dir)
@@ -27,7 +27,7 @@ class TensorSaver(object):
         num_tokens = tensor.shape[-2]
         seq_idx = self.cur_seq_idx
         for i in range(num_tokens):
-            print(f"seqidx {seq_idx}, ilayer {ilayer}, name {name}")
+            #print(f"seqidx {seq_idx}, ilayer {ilayer}, name {name}")
             if num_tokens == 1 and not is_weight:
                 filename = f"s{seq_idx}-l{ilayer}-{name}.npy"
                 filepath = os.path.join(save_dir, filename)
