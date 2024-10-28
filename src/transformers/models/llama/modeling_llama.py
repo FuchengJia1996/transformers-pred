@@ -632,6 +632,7 @@ class LlamaSparseAttention(nn.Module):
         else:
             if global_weight_preditor is not None and is_sparse_infer():
                 pred = global_weight_preditor.predict_by_x_thres(self.layer_idx, 0, hidden_states, global_weight_preditor.get_attn_sp(), global_weight_preditor.get_w_p())
+                # print('pred ', pred.size())
                 if global_tensor_saver is not None and pred.size()[-2] == 1:
                     global_tensor_saver.save(pred, self.layer_idx, "mask_qkv")
                 query_states = self.q_proj(global_weight_preditor.apply_pred(self.layer_idx, 0, hidden_states, pred))

@@ -190,7 +190,21 @@ class WeightPredictor(object):
                     wm_tensor = None
                 self.wmetrics[-1].append(wm_tensor)
         print(f"Init sparsity: attn {self.attn_sp}, mlp {self.mlp_sp}, w {self.w_p}")
-
+    def reset(self) :
+        self.predictors = []
+        self.preds = []
+        self.wmetrics = []
+        self.sparsity_accum = [0.0, 0.0]
+        self.attn_inp_prepred_precs = None
+        self.mlp_inp_prepred_precs = None
+        for ilayer in range(self.num_layers):
+            self.predictors.append([])
+            self.preds.append([])
+            self.wmetrics.append([])
+            for iweight in range(self.num_weights):
+                self.predictors[-1].append(None)
+                self.preds[-1].append(None)
+                self.wmetrics[-1].append(None)
     def load(self, weight_dir=None):
         if weight_dir is None:
             weight_dir = os.path.join("checkpoints", "weight-predictors", self.model_name)
@@ -330,6 +344,7 @@ class WeightPredictor(object):
         # Prediction.
         x = x.abs()
         preds = self.score_to_mask(x, sp)
+        # print(x.size(),preds.size())
         if w_mask_p >= 0.0 and w_mask_p <= 1.0:
             if w_mask_p > 0.0:
                 wmetrics = self.wmetrics[ilayer][iweight]
@@ -338,8 +353,9 @@ class WeightPredictor(object):
         elif w_mask_p == 2.0:
             #print(f"il {ilayer}, iw {iweight}")
             wmetrics = self.wmetrics[ilayer][iweight]
+            # print('wmetric ', wmetrics.size() , sp)
             preds = self.score_to_mask(x * wmetrics.to(x.device), sp)
-
+        # print('out ' , out_preds.size() if out_preds != None else 'None ',preds.size())
         if out_preds is None:
             out_preds = preds
 
