@@ -431,7 +431,7 @@ class WeightPredictor(object):
     def apply_pred(self, ilayer, iweight, x, pred=None):
         if ilayer < 0:
             return x
-        bs, q_len, hidden_size = x.size()
+        # bs, q_len, hidden_size = x.size()
         #assert bs == 1
         #if q_len > 1:
         #    return x
