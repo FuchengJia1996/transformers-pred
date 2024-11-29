@@ -547,11 +547,16 @@ def is_sparse_infer():
 
 def _init_weight_predictor():
     global global_weight_preditor
+    global MODEL_CONFIGS
     if global_weight_preditor is not None:
         return
     model_name = os.environ["MODEL_NAME"]
     if "-ft" in model_name:
         model_name = model_name[:model_name.find("-ft")]
+    for config in MODEL_CONFIGS :
+        if model_name.startswith(config):
+            model_name = config
+    print(model_name)
     dataset_name = "c4"
     dtype = torch.float32
     local_rank = os.environ["LOCAL_RANK"]
