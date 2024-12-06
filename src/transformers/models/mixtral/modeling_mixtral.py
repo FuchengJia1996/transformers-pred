@@ -389,7 +389,8 @@ class MixtralAttention(nn.Module):
                 # raise ValueError(
                 #     f"Attention mask should be of size {(bsz, 1, q_len, kv_seq_len)}, but is {attention_mask.size()}"
                 # )
-                attention_mask = attention_mask.reshape(bsz, 1, q_len, kv_seq_len)
+                attention_mask = attention_mask[:, :, :, :kv_seq_len]
+
             attn_weights = attn_weights + attention_mask
 
         # upcast attention to fp32
