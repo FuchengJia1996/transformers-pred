@@ -28,13 +28,28 @@ class TensorSaver(object):
         seq_idx = self.cur_seq_idx
         for i in range(num_tokens):
             #print(f"seqidx {seq_idx}, ilayer {ilayer}, name {name}")
-            if num_tokens == 1 and not is_weight:
+            if num_tokens == 1:
                 filename = f"s{seq_idx}-l{ilayer}-{name}.npy"
                 filepath = os.path.join(save_dir, filename)
                 t_arr = tensor[0, i].cpu().detach().numpy()
+                if ilayer == 0:
+                    print("")
                 print(f"Save {filename}, shape {t_arr.shape}", end="\r")
                 np.save(filepath, t_arr)
             seq_idx += 1
+
+    def save_attn_scores(self, tensor, ilayer, name):
+        seq_idx = self.cur_seq_idx
+        save_dir = os.environ["TENSOR_SAVE_DIR"]
+        if not os.path.exists(save_dir):
+            os.makedirs(save_dir)
+        filename = f"s{seq_idx}-l{ilayer}-{name}.npy"
+        filepath = os.path.join(save_dir, filename)
+        t_arr = tensor[0].cpu().detach().numpy()
+        if ilayer == 0:
+            print("")
+        print(f"Save {filename}, shape {t_arr.shape}", end="\r")
+        np.save(filepath, t_arr)
 
     def add_seq(self, ns):
         self.cur_seq_idx += ns

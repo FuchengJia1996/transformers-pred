@@ -667,7 +667,10 @@ class LlamaSparseAttention(nn.Module):
             #print(f"attn_weights {attn_weights.shape}, causal_mask {causal_mask.shape}")
             #print(f"attention_mask {attention_mask}")
             #print(f"position_ids {position_ids}")
+            #input()
             attn_weights = attn_weights + causal_mask
+            if global_tensor_saver is not None:
+                global_tensor_saver.save_attn_scores(attn_weights, self.layer_idx, "attns")
 
         # upcast attention to fp32
         attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query_states.dtype)
