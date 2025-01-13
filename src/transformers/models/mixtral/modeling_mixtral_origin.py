@@ -41,7 +41,16 @@ from ...modeling_outputs import (
     SequenceClassifierOutputWithPast,
     TokenClassifierOutput,
 )
-
+from ...modeling_utils import PreTrainedModel
+from ...pytorch_utils import is_torch_greater_or_equal_than_1_13
+from ...utils import (
+    add_start_docstrings,
+    add_start_docstrings_to_model_forward,
+    is_flash_attn_2_available,
+    is_flash_attn_greater_or_equal_2_10,
+    logging,
+    replace_return_docstrings,
+)
 from ...weight_predictor import (
     global_weight_preditor,
     is_weight_predictor_finetune_enabled,
@@ -53,18 +62,9 @@ from ...weight_predictor import (
     global_w_mask_p,
     global_enable_attention_predictor,
 )
-from ...modeling_utils import PreTrainedModel
-from ...pytorch_utils import is_torch_greater_or_equal_than_1_13
-from ...utils import (
-    add_start_docstrings,
-    add_start_docstrings_to_model_forward,
-    is_flash_attn_2_available,
-    is_flash_attn_greater_or_equal_2_10,
-    logging,
-    replace_return_docstrings,
-)
 from ...utils.import_utils import is_torch_fx_available
 from .configuration_mixtral import MixtralConfig
+from ...tensor_saver import global_tensor_saver
 
 
 if is_flash_attn_2_available():
@@ -342,9 +342,15 @@ class MixtralAttention(nn.Module):
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
         bsz, q_len, _ = hidden_states.size()
 
-        query_states = self.q_proj(hidden_states)
-        key_states = self.k_proj(hidden_states)
-        value_states = self.v_proj(hidden_states)
+        if global_weight_preditor is not None and is_sparse_infer():
+            pred = global_weight_preditor.predict_by_x_thres(self.layer_idx, 0, hidden_states, global_weight_preditor.get_attn_sp(), global_weight_preditor.get_w_p())
+            query_states = self.q_proj(global_weight_preditor.apply_pred(self.layer_idx, 0, hidden_states, pred))
+            key_states = self.k_proj(global_weight_preditor.apply_pred(self.layer_idx, 0, hidden_states, pred))
+            value_states = self.v_proj(global_weight_preditor.apply_pred(self.layer_idx, 0, hidden_states, pred))
+        else:
+            query_states = self.q_proj(hidden_states)
+            key_states = self.k_proj(hidden_states)
+            value_states = self.v_proj(hidden_states)
 
         query_states = query_states.view(bsz, q_len, self.num_heads, self.head_dim).transpose(1, 2)
         key_states = key_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
@@ -380,10 +386,17 @@ class MixtralAttention(nn.Module):
 
         if attention_mask is not None:
             if attention_mask.size() != (bsz, 1, q_len, kv_seq_len):
-                raise ValueError(
-                    f"Attention mask should be of size {(bsz, 1, q_len, kv_seq_len)}, but is {attention_mask.size()}"
-                )
-
+                # raise ValueError(
+                #     f"Attention mask should be of size {(bsz, 1, q_len, kv_seq_len)}, but is {attention_mask.size()}"
+                # )
+                
+                print(attention_mask.size())
+                if attention_mask.size(-1) < kv_seq_len:
+                    pad_size = kv_seq_len - attention_mask.size(-1)
+                    attention_mask = F.pad(attention_mask, (0, pad_size), value=float('-inf'))
+                else :
+                    attention_mask = attention_mask[:,:,:,:kv_seq_len]
+                # attention_mask = attention_mask[bsz,1,q_len,:kv_seq_len]
             attn_weights = attn_weights + attention_mask
 
         # upcast attention to fp32
@@ -400,7 +413,11 @@ class MixtralAttention(nn.Module):
         attn_output = attn_output.transpose(1, 2).contiguous()
         attn_output = attn_output.reshape(bsz, q_len, self.hidden_size)
 
-        attn_output = self.o_proj(attn_output)
+        if global_weight_preditor is not None and is_sparse_infer():
+            pred = global_weight_preditor.predict_by_x_thres(self.layer_idx, 3, attn_output, global_weight_preditor.get_attn_sp(), global_weight_preditor.get_w_p())
+            attn_output = self.o_proj(global_weight_preditor.apply_pred(self.layer_idx, 3, attn_output, pred))
+        else:
+            attn_output = self.o_proj(attn_output)
 
         if not output_attentions:
             attn_weights = None
@@ -797,8 +814,10 @@ MIXTRAL_ATTENTION_CLASSES = {
 
 
 class MixtralBlockSparseTop2MLP(nn.Module):
-    def __init__(self, config: MixtralConfig):
+    def __init__(self, config: MixtralConfig, layer_idx: Optional[int] = None, expert_idx: Optional[int] = None):
         super().__init__()
+        self.layer_idx = layer_idx
+        self.expert_idx = expert_idx
         self.ffn_dim = config.intermediate_size
         self.hidden_dim = config.hidden_size
 
@@ -809,8 +828,28 @@ class MixtralBlockSparseTop2MLP(nn.Module):
         self.act_fn = ACT2FN[config.hidden_act]
 
     def forward(self, hidden_states):
-        current_hidden_states = self.act_fn(self.w1(hidden_states)) * self.w3(hidden_states)
-        current_hidden_states = self.w2(current_hidden_states)
+        if global_weight_preditor is not None and is_sparse_infer():
+            pred = global_weight_preditor.predict_by_x_thres(
+                self.layer_idx,
+                4 + self.expert_idx * 3,
+                hidden_states,
+                global_weight_preditor.get_mlp_sp(),
+                global_weight_preditor.get_w_p()
+            )
+            x1 = self.w1(global_weight_preditor.apply_pred(self.layer_idx, 4, hidden_states, pred))
+            x3 = self.w3(global_weight_preditor.apply_pred(self.layer_idx, 4, hidden_states, pred))
+            current_hidden_states = self.act_fn(x1) * x3
+            pred = global_weight_preditor.predict_by_x_thres(
+                self.layer_idx,
+                6 + self.expert_idx * 3,
+                current_hidden_states,
+                global_weight_preditor.get_mlp_sp(),
+                global_weight_preditor.get_w_p()
+            )
+            current_hidden_states = self.w2(global_weight_preditor.apply_pred(self.layer_idx, 6, current_hidden_states, pred))
+        else:
+            current_hidden_states = self.act_fn(self.w1(hidden_states)) * self.w3(hidden_states)
+            current_hidden_states = self.w2(current_hidden_states)
         return current_hidden_states
 
 
@@ -826,8 +865,10 @@ class MixtralSparseMoeBlock(nn.Module):
     and memory on padding.
     """
 
-    def __init__(self, config):
+    def __init__(self, config, layer_idx: Optional[int] = None, num_hidden_layers: Optional[int] = None):
         super().__init__()
+        self.layer_idx = layer_idx
+        self.num_hidden_layers = num_hidden_layers
         self.hidden_dim = config.hidden_size
         self.ffn_dim = config.intermediate_size
         self.num_experts = config.num_local_experts
@@ -836,17 +877,18 @@ class MixtralSparseMoeBlock(nn.Module):
         # gating
         self.gate = nn.Linear(self.hidden_dim, self.num_experts, bias=False)
 
-        self.experts = nn.ModuleList([MixtralBlockSparseTop2MLP(config) for _ in range(self.num_experts)])
+        self.experts = nn.ModuleList([MixtralBlockSparseTop2MLP(config, layer_idx, i) for i in range(self.num_experts)])
 
         # Jitter parameters
         self.jitter_noise = config.router_jitter_noise
 
-    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+    def forward(self, hidden_states: torch.Tensor, router_logits: Optional[torch.Tensor] = None) -> torch.Tensor:
         """ """
         batch_size, sequence_length, hidden_dim = hidden_states.shape
         if self.training and self.jitter_noise > 0:
             hidden_states *= torch.empty_like(hidden_states).uniform_(1.0 - self.jitter_noise, 1.0 + self.jitter_noise)
         hidden_states = hidden_states.view(-1, hidden_dim)
+
         # router_logits: (batch * sequence_length, n_experts)
         router_logits = self.gate(hidden_states)
 
@@ -856,13 +898,15 @@ class MixtralSparseMoeBlock(nn.Module):
         # we cast back to the input dtype
         routing_weights = routing_weights.to(hidden_states.dtype)
 
-        final_hidden_states = torch.zeros(
-            (batch_size * sequence_length, hidden_dim), dtype=hidden_states.dtype, device=hidden_states.device
-        )
-
         # One hot encode the selected experts to create an expert mask
         # this will be used to easily index which expert is going to be sollicitated
         expert_mask = torch.nn.functional.one_hot(selected_experts, num_classes=self.num_experts).permute(2, 1, 0)
+        #print(f"expert_mask_shape {expert_mask.shape}")
+        #print(f"expert_mask {expert_mask}")
+
+        final_hidden_states = torch.zeros(
+            (batch_size * sequence_length, hidden_dim), dtype=hidden_states.dtype, device=hidden_states.device
+        )
 
         # Loop over all available experts in the model and perform the computation on each expert
         for expert_idx in range(self.num_experts):
@@ -874,6 +918,7 @@ class MixtralSparseMoeBlock(nn.Module):
             # states by `routing_weights` on the corresponding tokens (top-1 and top-2)
             current_state = hidden_states[None, top_x].reshape(-1, hidden_dim)
             current_hidden_states = expert_layer(current_state) * routing_weights[top_x, idx, None]
+            #print(f"e_idx {expert_idx}, idx {idx}, top_x {top_x}, x_shape {current_hidden_states.shape}")
 
             # However `index_add_` only support torch tensors for indexing so we'll use
             # the `top_x` tensor here.
@@ -883,13 +928,14 @@ class MixtralSparseMoeBlock(nn.Module):
 
 
 class MixtralDecoderLayer(nn.Module):
-    def __init__(self, config: MixtralConfig, layer_idx: int):
+    def __init__(self, config: MixtralConfig, layer_idx: int, num_hidden_layers: int):
         super().__init__()
+        self.layer_idx = layer_idx
         self.hidden_size = config.hidden_size
 
         self.self_attn = MIXTRAL_ATTENTION_CLASSES[config._attn_implementation](config, layer_idx)
 
-        self.block_sparse_moe = MixtralSparseMoeBlock(config)
+        self.block_sparse_moe = MixtralSparseMoeBlock(config, layer_idx, num_hidden_layers)
         self.input_layernorm = MixtralRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.post_attention_layernorm = MixtralRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
 
@@ -899,6 +945,7 @@ class MixtralDecoderLayer(nn.Module):
         attention_mask: Optional[torch.Tensor] = None,
         position_ids: Optional[torch.LongTensor] = None,
         past_key_value: Optional[Tuple[torch.Tensor]] = None,
+        router_logits: Optional[torch.LongTensor] = None,
         output_attentions: Optional[bool] = False,
         output_router_logits: Optional[bool] = False,
         use_cache: Optional[bool] = False,
@@ -923,6 +970,9 @@ class MixtralDecoderLayer(nn.Module):
         residual = hidden_states
 
         hidden_states = self.input_layernorm(hidden_states)
+        if global_tensor_saver is not None:
+            global_tensor_saver.save(self.input_layernorm.weight, self.layer_idx, "alnw")
+            global_tensor_saver.save(hidden_states, self.layer_idx, "ai")
 
         # Self Attention
         hidden_states, self_attn_weights, present_key_value = self.self_attn(
@@ -933,13 +983,27 @@ class MixtralDecoderLayer(nn.Module):
             output_attentions=output_attentions,
             use_cache=use_cache,
         )
+        if global_tensor_saver is not None:
+            global_tensor_saver.save(hidden_states, self.layer_idx, "ao")
+            global_tensor_saver.save(residual, self.layer_idx, "aor")
         hidden_states = residual + hidden_states
+        if global_tensor_saver is not None:
+            global_tensor_saver.save(residual, self.layer_idx, "aorr")
 
         # Fully Connected
         residual = hidden_states
         hidden_states = self.post_attention_layernorm(hidden_states)
-        hidden_states, router_logits = self.block_sparse_moe(hidden_states)
+        if global_tensor_saver is not None:
+            global_tensor_saver.save(self.post_attention_layernorm.weight, self.layer_idx, "mlnw")
+            global_tensor_saver.save(hidden_states, self.layer_idx, "mi")
+            #global_tensor_saver.save(torch.abs(self.mlp.gate_proj.weight.data).mean(dim=0), self.layer_idx, "mean_w_gate")
+        hidden_states, router_logits = self.block_sparse_moe(hidden_states, router_logits)
+        if global_tensor_saver is not None:
+            global_tensor_saver.save(hidden_states, self.layer_idx, "mo")
+            global_tensor_saver.save(residual, self.layer_idx, "mor")
         hidden_states = residual + hidden_states
+        if global_tensor_saver is not None:
+            global_tensor_saver.save(residual, self.layer_idx, "morr")
 
         outputs = (hidden_states,)
 
@@ -1087,15 +1151,17 @@ class MixtralModel(MixtralPreTrainedModel):
 
         self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size, self.padding_idx)
         self.layers = nn.ModuleList(
-            [MixtralDecoderLayer(config, layer_idx) for layer_idx in range(config.num_hidden_layers)]
+            [MixtralDecoderLayer(config, layer_idx, config.num_hidden_layers) for layer_idx in range(config.num_hidden_layers)]
         )
-        self.global_weight_preditor = None
-        if global_weight_preditor is not None:
-            self.global_weight_preditor = global_weight_preditor
         self._attn_implementation = config._attn_implementation
         self.norm = MixtralRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
 
         self.gradient_checkpointing = False
+
+        self.global_weight_preditor = None
+        if global_weight_preditor is not None:
+            self.global_weight_preditor = global_weight_preditor
+
         # Initialize weights and apply final processing
         self.post_init()
 
@@ -1219,6 +1285,7 @@ class MixtralModel(MixtralPreTrainedModel):
                     attention_mask,
                     position_ids,
                     past_key_values,
+                    all_router_logits,
                     output_attentions,
                     output_router_logits,
                     use_cache,
@@ -1229,6 +1296,7 @@ class MixtralModel(MixtralPreTrainedModel):
                     attention_mask=attention_mask,
                     position_ids=position_ids,
                     past_key_value=past_key_values,
+                    router_logits=all_router_logits,
                     output_attentions=output_attentions,
                     output_router_logits=output_router_logits,
                     use_cache=use_cache,

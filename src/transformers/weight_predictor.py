@@ -139,7 +139,22 @@ MODEL_CONFIGS = {
         ],
         "attn_inp_prepred_precs": ['0.37', '0.59', '0.33', '0.48', '0.55', '0.49', '0.54', '0.57', '0.59', '0.63', '0.61', '0.68', '0.62', '0.69', '0.65', '0.71', '0.71', '0.69', '0.69', '0.73', '0.70', '0.70', '0.72', '0.75', '0.74', '0.71', '0.79', '0.80', '0.73', '0.75', '0.76'],
         "mlp_inp_prepred_precs": ['0.47', '0.36', '0.49', '0.56', '0.47', '0.51', '0.57', '0.59', '0.60', '0.61', '0.63', '0.65', '0.63', '0.66', '0.69', '0.69', '0.70', '0.67', '0.68', '0.70', '0.68', '0.69', '0.74', '0.76', '0.72', '0.78', '0.80', '0.74', '0.73', '0.79', '0.69']
-    }
+    },
+    
+     "Qwen1.5-MoE-A2.7B-Chat-GPTQ-Int4": {
+        "num_layers": 32, "num_weights": 29,
+        "pred_sizes": [
+            [4096, 4096], [4096, 4096], [4096, 4096], [4096, 4096],
+            [4096, 4096], [4096, 4096], [14336, 14336],
+            [4096, 4096], [4096, 4096], [14336, 14336],
+            [4096, 4096], [4096, 4096], [14336, 14336],
+            [4096, 4096], [4096, 4096], [14336, 14336],
+            [4096, 4096], [4096, 4096], [14336, 14336],
+            [4096, 4096], [4096, 4096], [14336, 14336],
+            [4096, 4096], [4096, 4096], [14336, 14336],
+            [4096, 4096], [4096, 4096], [14336, 14336],
+            [4096, 4096]
+        ]},
 }
 
 
@@ -184,25 +199,32 @@ class WeightPredictor(object):
             self.preds.append([])
             self.wmetrics.append([])
             for iweight in range(self.num_weights):
-                x_size = self.pred_sizes[iweight][0]
-                y_size = self.pred_sizes[iweight][1]
-                query_layer = None
-                self.predictors[-1].append(query_layer)
-                #self.preds[-1].append(torch.zeros((1, y_size), dtype=torch.int64, device=device))
+                self.predictors[-1].append(None)
                 self.preds[-1].append(None)
+                self.wmetrics[-1].append(None)
+        # for ilayer in range(self.num_layers):
+        #     self.predictors.append([])
+        #     self.preds.append([])
+        #     self.wmetrics.append([])
+        #     for iweight in range(self.num_weights):
+        #         # query_layer = None
+        #         self.predictors[-1].append(None)
+                # self.preds[-1].append(torch.zeros((1, y_size), dtype=torch.int64, device=device))
+                # self.preds[-1].append(None)
 
                 # Load w metrics
-                dir_path = os.environ["PREDICTOR_DATA_DIR"]
-                data_type = "mean"
-                filepath = os.path.join(dir_path, f"ow{data_type}-l{ilayer}w{iweight}.npy")
-                #assert os.path.exists(filepath), "Data file not exist: " + filepath
-                if os.path.exists(filepath) and False:
-                    wm_arr = np.load(filepath)
-                    wm_tensor = torch.from_numpy(wm_arr).to(torch.float16).to(device)
-                    #print(f"Load {filepath}, shape {wm_tensor.shape}")
-                else:
-                    wm_tensor = None
-                self.wmetrics[-1].append(wm_tensor)
+                # dir_path = os.environ["PREDICTOR_DATA_DIR"]
+                # data_type = "mean"
+                # filepath = os.path.join(dir_path, f"ow{data_type}-l{ilayer}w{iweight}.npy")
+                # assert os.path.exists(filepath), "Data file not exist: " + filepath
+                # if os.path.exists(filepath) and False:
+                #     wm_arr = np.load(filepath)
+                #     wm_tensor = torch.from_numpy(wm_arr).to(torch.float16).to(device)
+                #     print(f"Load {filepath}, shape {wm_tensor.shape}")
+                # else:
+                #     wm_tensor = None
+                # self.wmetrics[-1].append(wm_tensor)
+                # self.wmetrics[-1].append(None)
         print(f"Init sparsity: attn {self.attn_sp}, mlp {self.mlp_sp}, w {self.w_p}")
     def reset(self) :
         self.predictors = []
@@ -323,24 +345,24 @@ class WeightPredictor(object):
         mask = mask.to(torch.int64)
         return mask
 
-    def combine_mask(self, x_mask, w_mask):
-        org_shape = x_mask.shape
-        hidden_size = x_mask.shape[-1]
-        x_mask = x_mask.reshape((-1, hidden_size))
-        out_mask = x_mask.clone()
-        nsamples = x_mask.shape[0]
-        for i in range(nsamples):
-            m = x_mask[i] + w_mask[0]
-            m = m > 0
-            m = m.to(torch.int64)
-            out_mask.data[i] = m.data
-        return out_mask.reshape(org_shape)
+    # def combine_mask(self, x_mask, w_mask):
+    #     org_shape = x_mask.shape
+    #     hidden_size = x_mask.shape[-1]
+    #     x_mask = x_mask.reshape((-1, hidden_size))
+    #     out_mask = x_mask.clone()
+    #     nsamples = x_mask.shape[0]
+    #     for i in range(nsamples):
+    #         m = x_mask[i] + w_mask[0]
+    #         m = m > 0
+    #         m = m.to(torch.int64)
+    #         out_mask.data[i] = m.data
+    #     return out_mask.reshape(org_shape)
 
     def combine_mask_v2(self, x_mask, w_mask):
-        org_shape = x_mask.shape
-        hidden_size = x_mask.shape[-1]
-        out_mask = x_mask.clone()
-        nsamples = x_mask.shape[0]
+        # org_shape = x_mask.shape
+        # hidden_size = x_mask.shape[-1]
+        # out_mask = x_mask.clone()
+        # nsamples = x_mask.shape[0]
         m = x_mask + w_mask[0]
         m = m > 0
         m = m.to(torch.int64)
@@ -556,6 +578,8 @@ def _init_weight_predictor():
     for config in MODEL_CONFIGS :
         if model_name.startswith(config):
             model_name = config
+    if model_name.startswith('Mixtral'):
+        model_name = 'Mixtral-8x7B-Instruct'
     print(model_name)
     dataset_name = "c4"
     dtype = torch.float32

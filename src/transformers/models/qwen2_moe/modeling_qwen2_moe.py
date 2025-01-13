@@ -23,6 +23,17 @@ import inspect
 import math
 from typing import List, Optional, Tuple, Union
 
+from ...weight_predictor import (
+    global_weight_preditor,
+    is_weight_predictor_finetune_enabled,
+    is_sparse_infer,
+    global_attn_prob_threshold,
+    global_mlp_prob_threshold,
+    global_attn_sp,
+    global_mlp_sp,
+    global_w_mask_p,
+    global_enable_attention_predictor,
+)
 import torch
 import torch.nn.functional as F
 import torch.utils.checkpoint
@@ -1255,6 +1266,9 @@ class Qwen2MoeForCausalLM(Qwen2MoePreTrainedModel):
     def __init__(self, config):
         super().__init__(config)
         self.model = Qwen2MoeModel(config)
+        self.global_weight_preditor = None
+        if self.global_weight_preditor == None:
+            self.global_weight_preditor = global_weight_preditor
         self.vocab_size = config.vocab_size
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
 
