@@ -350,26 +350,11 @@ class LlamaSparseMLP(nn.Module):
             down_proj = sum(down_proj)
         else:
             if global_weight_preditor is not None and is_sparse_infer():
-                pred = global_weight_preditor.predict_by_x_thres(self.layer_idx, 4, x, global_weight_preditor.get_mlp_sp(), global_weight_preditor.get_w_p())
-                if global_tensor_saver is not None and pred.size()[-2] == 1:
-                    global_tensor_saver.save(pred, self.layer_idx, "mask_gate")
-                x_gate = self.gate_proj(global_weight_preditor.apply_pred(self.layer_idx, 4, x, pred))
-                if global_tensor_saver is not None and False:
-                    x_gate_org = self.gate_proj(x)
-                    act_x = self.act_fn(x_gate)
-                    act_x_org = self.act_fn(x_gate_org)
-                    global_tensor_saver.save(x_gate_org - x_gate, self.layer_idx, "err_gate")
-                    global_tensor_saver.save(x_gate, self.layer_idx, "x_gate")
-                    global_tensor_saver.save(x_gate_org, self.layer_idx, "x_gate_org")
-                    global_tensor_saver.save(act_x, self.layer_idx, "act_x")
-                    global_tensor_saver.save(act_x_org, self.layer_idx, "act_x_org")
-                x_up = self.up_proj(global_weight_preditor.apply_pred(self.layer_idx, 4, x, pred))
+                x_gate = self.gate_proj(global_weight_preditor.generate_pred(self.layer_idx, 4, x))
+                x_up = self.up_proj(global_weight_preditor.generate_pred(self.layer_idx, 5, x))
                 x = self.act_fn(x_gate) * x_up
-                #global_weight_preditor.predict(self.layer_idx + 1, 6, x, prob_threshold=global_mlp_prob_threshold)
-                pred = global_weight_preditor.predict_by_x_thres(self.layer_idx, 6, x, global_weight_preditor.get_mlp_sp(), global_weight_preditor.get_w_p())
-                down_proj = self.down_proj(global_weight_preditor.apply_pred(self.layer_idx, 6, x, pred))
+                down_proj = self.down_proj(global_weight_preditor.generate_pred(self.layer_idx, 6, x))
             else:
-                #down_proj = self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))
                 x = self.act_fn(self.gate_proj(x)) * self.up_proj(x)
                 if global_tensor_saver is not None:
                     global_tensor_saver.save(x, self.layer_idx, "downi")
@@ -631,13 +616,9 @@ class LlamaSparseAttention(nn.Module):
 
         else:
             if global_weight_preditor is not None and is_sparse_infer():
-                pred = global_weight_preditor.predict_by_x_thres(self.layer_idx, 0, hidden_states, global_weight_preditor.get_attn_sp(), global_weight_preditor.get_w_p())
-                # print('pred ', pred.size())
-                if global_tensor_saver is not None and pred.size()[-2] == 1:
-                    global_tensor_saver.save(pred, self.layer_idx, "mask_qkv")
-                query_states = self.q_proj(global_weight_preditor.apply_pred(self.layer_idx, 0, hidden_states, pred))
-                key_states = self.k_proj(global_weight_preditor.apply_pred(self.layer_idx, 0, hidden_states, pred))
-                value_states = self.v_proj(global_weight_preditor.apply_pred(self.layer_idx, 0, hidden_states, pred))
+                query_states = self.q_proj(global_weight_preditor.generate_pred(self.layer_idx, 0, hidden_states))
+                key_states = self.k_proj(global_weight_preditor.generate_pred(self.layer_idx, 1, hidden_states))
+                value_states = self.v_proj(global_weight_preditor.generate_pred(self.layer_idx, 2, hidden_states))
                 #key_states = self.k_proj(hidden_states)
                 #value_states = self.v_proj(hidden_states)
             else:
@@ -692,8 +673,7 @@ class LlamaSparseAttention(nn.Module):
             if global_weight_preditor is not None and is_sparse_infer():
                 #global_weight_preditor.predict(self.layer_idx + 1, 3, attn_output)
                 #global_weight_preditor.predict_heads(self.layer_idx + 1, 3, attn_output, self.head_dim, head_percent=0.8)
-                pred = global_weight_preditor.predict_by_x_thres(self.layer_idx, 3, attn_output, global_weight_preditor.get_attn_sp(), global_weight_preditor.get_w_p())
-                attn_output = self.o_proj(global_weight_preditor.apply_pred(self.layer_idx, 3, attn_output, pred))
+                attn_output = self.o_proj(global_weight_preditor.generate_pred(self.layer_idx, 3, attn_output))
             else:
                 if global_tensor_saver is not None:
                     global_tensor_saver.save(attn_output, self.layer_idx, "attnoi")
