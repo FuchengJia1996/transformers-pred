@@ -4,24 +4,20 @@ import torch
 import numpy as np
 from tqdm import tqdm
 import json
-BLOCK_NAME = {
-    'attn_q',
-    'attn_k',
-    'attn_v',
-    'attn_o',
-    'mlp_gate',
-    'mlp_up',
-    'mlp_down'
-}
+import math
+
+BLOCK_NAME = [
+    'q',
+    'k',
+    'v',
+    'o',
+    'gate',
+    'up',
+    'down'
+]
 
 MODEL_CONFIGS = {
-    "Llama-2-7b-hf": {
-        "num_layers": 32, "num_weights": 7,
-        "pred_sizes": [
-            [4096, 4096], [4096, 4096], [4096, 4096], [4096, 4096],
-            [4096, 4096], [4096, 4096], [11008, 11008]
-        ]},
-    "Llama-2-7b-chat-hf": {
+    "Llama-2-7b": {
         "num_layers": 32, "num_weights": 7,
         "pred_sizes": [
             [4096, 4096], [4096, 4096], [4096, 4096], [4096, 4096],
@@ -35,12 +31,6 @@ MODEL_CONFIGS = {
         "pred_sizes": [
             [4096, 4096], [4096, 4096], [4096, 4096], [4096, 4096],
             [4096, 4096], [4096, 4096], [14336, 14336]
-        ]},
-    "Meta-Llama-3-8B-Instruct": {
-        "num_layers": 32, "num_weights": 7,
-        "pred_sizes": [
-            [4096, 4096], [4096, 4096], [4096, 4096], [4096, 4096],
-            [4096, 4096], [4096, 4096], [14336, 14336]
         ],
         "attn_inp_prepred_precs": ['0.41', '0.45', '0.90', '0.92', '0.92', '0.92', '0.91', '0.91', '0.90', '0.90', '0.86', '0.91', '0.90', '0.90', '0.86', '0.84', '0.91', '0.89', '0.92', '0.90', '0.91', '0.91', '0.92', '0.91', '0.91', '0.89', '0.89', '0.86', '0.82', '0.70', '0.58'],
         "mlp_inp_prepred_precs": ['0.29', '0.32', '0.94', '0.92', '0.91', '0.90', '0.89', '0.91', '0.90', '0.91', '0.85', '0.91', '0.91', '0.88', '0.88', '0.83', '0.89', '0.88', '0.90', '0.90', '0.90', '0.91', '0.89', '0.91', '0.91', '0.89', '0.88', '0.84', '0.75', '0.70', '0.57']
@@ -50,23 +40,11 @@ MODEL_CONFIGS = {
         "pred_sizes": [
             [4096, 4096], [4096, 4096], [4096, 4096], [4096, 4096],
             [4096, 4096], [4096, 4096], [14336, 14336]
-        ]},
-    "Meta-Llama-3.1-8B-Instruct": {
-        "num_layers": 32, "num_weights": 7,
-        "pred_sizes": [
-            [4096, 4096], [4096, 4096], [4096, 4096], [4096, 4096],
-            [4096, 4096], [4096, 4096], [14336, 14336]
         ],
         "attn_inp_prepred_precs": ['0.40', '0.44', '0.86', '0.93', '0.94', '0.92', '0.92', '0.93', '0.91', '0.92', '0.86', '0.92', '0.93', '0.90', '0.90', '0.88', '0.92', '0.90', '0.92', '0.92', '0.94', '0.92', '0.92', '0.93', '0.92', '0.91', '0.91', '0.87', '0.85', '0.71', '0.57'],
         "mlp_inp_prepred_precs": ['0.30', '0.29', '0.95', '0.93', '0.93', '0.91', '0.91', '0.92', '0.92', '0.92', '0.87', '0.93', '0.94', '0.90', '0.90', '0.85', '0.90', '0.89', '0.90', '0.92', '0.92', '0.94', '0.92', '0.93', '0.91', '0.91', '0.89', '0.85', '0.78', '0.70', '0.55']
     },
-    "Llama-2-13b-hf": {
-        "num_layers": 40, "num_weights": 7,
-        "pred_sizes": [
-            [5120, 5120], [5120, 5120], [5120, 5120], [5120, 5120],
-            [5120, 5120], [5120, 5120], [13824, 13824]
-        ]},
-    "Llama-2-13b-chat-hf": {
+    "Llama-2-13b": {
         "num_layers": 40, "num_weights": 7,
         "pred_sizes": [
             [5120, 5120], [5120, 5120], [5120, 5120], [5120, 5120],
@@ -75,7 +53,7 @@ MODEL_CONFIGS = {
         "attn_inp_prepred_precs": ['0.28', '0.53', '0.68', '0.26', '0.95', '0.91', '0.90', '0.60', '0.92', '0.94', '0.94', '0.93', '0.93', '0.93', '0.91', '0.91', '0.91', '0.87', '0.94', '0.93', '0.90', '0.80', '0.79', '0.90', '0.93', '0.80', '0.92', '0.93', '0.94', '0.94', '0.92', '0.93', '0.90', '0.92', '0.91', '0.91', '0.89', '0.73', '0.46'],
         "mlp_inp_prepred_precs": ['0.37', '0.56', '0.32', '0.25', '0.95', '0.92', '0.89', '0.60', '0.91', '0.92', '0.93', '0.93', '0.92', '0.93', '0.90', '0.90', '0.91', '0.88', '0.93', '0.93', '0.89', '0.80', '0.78', '0.92', '0.94', '0.81', '0.92', '0.93', '0.93', '0.93', '0.93', '0.93', '0.89', '0.93', '0.88', '0.91', '0.86', '0.72', '0.30']
     },
-    "Mixtral-8x7B-v0.1": {
+    "Mixtral-8x7B": {
         "num_layers": 32, "num_weights": 29,
         "pred_sizes": [
             [4096, 4096], [4096, 4096], [4096, 4096], [4096, 4096],
@@ -89,21 +67,7 @@ MODEL_CONFIGS = {
             [4096, 4096], [4096, 4096], [14336, 14336],
             [4096, 4096]
         ]},
-    "Mixtral-8x7B-Instruct": {
-        "num_layers": 32, "num_weights": 29,
-        "pred_sizes": [
-            [4096, 4096], [4096, 4096], [4096, 4096], [4096, 4096],
-            [4096, 4096], [4096, 4096], [14336, 14336],
-            [4096, 4096], [4096, 4096], [14336, 14336],
-            [4096, 4096], [4096, 4096], [14336, 14336],
-            [4096, 4096], [4096, 4096], [14336, 14336],
-            [4096, 4096], [4096, 4096], [14336, 14336],
-            [4096, 4096], [4096, 4096], [14336, 14336],
-            [4096, 4096], [4096, 4096], [14336, 14336],
-            [4096, 4096], [4096, 4096], [14336, 14336],
-            [4096, 4096]
-        ]},
-    "Llama-2-70b-chat-hf": {
+    "Llama-2-70b": {
         "num_layers": 80, "num_weights": 7,
         "pred_sizes": [
             [8192, 8192], [8192, 8192], [8192, 8192], [8192, 8192],
@@ -117,12 +81,6 @@ MODEL_CONFIGS = {
         "pred_sizes": [
             [8192, 8192], [8192, 8192], [8192, 8192], [8192, 8192],
             [8192, 8192], [8192, 8192], [28672, 28672]
-        ]},
-    "Meta-Llama-3-70B-Instruct": {
-        "num_layers": 80, "num_weights": 7,
-        "pred_sizes": [
-            [8192, 8192], [8192, 8192], [8192, 8192], [8192, 8192],
-            [8192, 8192], [8192, 8192], [28672, 28672]
         ],
         "attn_inp_prepred_precs": ['0.27', '0.84', '0.87', '0.31', '0.90', '0.72', '0.83', '0.73', '0.86', '0.74', '0.89', '0.82', '0.79', '0.87', '0.90', '0.92', '0.95', '0.96', '0.62', '0.92', '0.94', '0.93', '0.93', '0.91', '0.93', '0.91', '0.93', '0.94', '0.94', '0.93', '0.94', '0.93', '0.93', '0.92', '0.92', '0.94', '0.93', '0.95', '0.83', '0.95', '0.95', '0.96', '0.91', '0.96', '0.97', '0.86', '0.97', '0.97', '0.96', '0.97', '0.96', '0.95', '0.96', '0.96', '0.95', '0.97', '0.94', '0.95', '0.96', '0.96', '0.96', '0.96', '0.85', '0.96', '0.96', '0.96', '0.91', '0.96', '0.94', '0.90', '0.83', '0.91', '0.91', '0.88', '0.85', '0.82', '0.74', '0.72', '0.38'],
         "mlp_inp_prepred_precs": ['0.27', '0.84', '0.87', '0.31', '0.90', '0.72', '0.83', '0.73', '0.86', '0.74', '0.89', '0.82', '0.79', '0.87', '0.90', '0.92', '0.95', '0.96', '0.62', '0.92', '0.94', '0.93', '0.93', '0.91', '0.93', '0.91', '0.93', '0.94', '0.94', '0.93', '0.94', '0.93', '0.93', '0.92', '0.92', '0.94', '0.93', '0.95', '0.83', '0.95', '0.95', '0.96', '0.91', '0.96', '0.97', '0.86', '0.97', '0.97', '0.96', '0.97', '0.96', '0.95', '0.96', '0.96', '0.95', '0.97', '0.94', '0.95', '0.96', '0.96', '0.96', '0.96', '0.85', '0.96', '0.96', '0.96', '0.91', '0.96', '0.94', '0.90', '0.83', '0.91', '0.91', '0.88', '0.85', '0.82', '0.74', '0.72', '0.38']
@@ -132,17 +90,11 @@ MODEL_CONFIGS = {
         "pred_sizes": [
             [8192, 8192], [8192, 8192], [8192, 8192], [8192, 8192],
             [8192, 8192], [8192, 8192], [28672, 28672]
-        ]},
-    "Meta-Llama-3.1-70B-Instruct": {
-        "num_layers": 80, "num_weights": 7,
-        "pred_sizes": [
-            [8192, 8192], [8192, 8192], [8192, 8192], [8192, 8192],
-            [8192, 8192], [8192, 8192], [28672, 28672]
         ],
         "attn_inp_prepred_precs": ['0.26', '0.82', '0.83', '0.31', '0.90', '0.69', '0.79', '0.72', '0.85', '0.64', '0.86', '0.81', '0.77', '0.86', '0.89', '0.92', '0.95', '0.96', '0.51', '0.92', '0.93', '0.92', '0.94', '0.92', '0.95', '0.92', '0.93', '0.93', '0.93', '0.93', '0.94', '0.93', '0.93', '0.93', '0.93', '0.94', '0.93', '0.95', '0.81', '0.95', '0.96', '0.98', '0.93', '0.94', '0.97', '0.82', '0.97', '0.98', '0.96', '0.96', '0.96', '0.96', '0.96', '0.97', '0.96', '0.98', '0.94', '0.94', '0.96', '0.97', '0.97', '0.97', '0.86', '0.98', '0.96', '0.97', '0.91', '0.97', '0.95', '0.92', '0.82', '0.92', '0.92', '0.90', '0.85', '0.82', '0.74', '0.78', '0.54'],
         "mlp_inp_prepred_precs": ['0.26', '0.82', '0.83', '0.31', '0.90', '0.69', '0.79', '0.72', '0.85', '0.64', '0.86', '0.81', '0.77', '0.86', '0.89', '0.92', '0.95', '0.96', '0.51', '0.92', '0.93', '0.92', '0.94', '0.92', '0.95', '0.92', '0.93', '0.93', '0.93', '0.93', '0.94', '0.93', '0.93', '0.93', '0.93', '0.94', '0.93', '0.95', '0.81', '0.95', '0.96', '0.98', '0.93', '0.94', '0.97', '0.82', '0.97', '0.98', '0.96', '0.96', '0.96', '0.96', '0.96', '0.97', '0.96', '0.98', '0.94', '0.94', '0.96', '0.97', '0.97', '0.97', '0.86', '0.98', '0.96', '0.97', '0.91', '0.97', '0.95', '0.92', '0.82', '0.92', '0.92', '0.90', '0.85', '0.82', '0.74', '0.78', '0.54']
     },
-    "Phi-3.5-mini-instruct": {
+    "Phi-3.5": {
         "num_layers": 32, "num_weights": 4,
         "pred_sizes": [
             [3072, 3072], [3072, 3072], [3072, 3072], [8192, 8192]
@@ -150,21 +102,6 @@ MODEL_CONFIGS = {
         "attn_inp_prepred_precs": ['0.37', '0.59', '0.33', '0.48', '0.55', '0.49', '0.54', '0.57', '0.59', '0.63', '0.61', '0.68', '0.62', '0.69', '0.65', '0.71', '0.71', '0.69', '0.69', '0.73', '0.70', '0.70', '0.72', '0.75', '0.74', '0.71', '0.79', '0.80', '0.73', '0.75', '0.76'],
         "mlp_inp_prepred_precs": ['0.47', '0.36', '0.49', '0.56', '0.47', '0.51', '0.57', '0.59', '0.60', '0.61', '0.63', '0.65', '0.63', '0.66', '0.69', '0.69', '0.70', '0.67', '0.68', '0.70', '0.68', '0.69', '0.74', '0.76', '0.72', '0.78', '0.80', '0.74', '0.73', '0.79', '0.69']
     },
-    
-     "Qwen1.5-MoE-A2.7B-Chat-GPTQ-Int4": {
-        "num_layers": 32, "num_weights": 29,
-        "pred_sizes": [
-            [4096, 4096], [4096, 4096], [4096, 4096], [4096, 4096],
-            [4096, 4096], [4096, 4096], [14336, 14336],
-            [4096, 4096], [4096, 4096], [14336, 14336],
-            [4096, 4096], [4096, 4096], [14336, 14336],
-            [4096, 4096], [4096, 4096], [14336, 14336],
-            [4096, 4096], [4096, 4096], [14336, 14336],
-            [4096, 4096], [4096, 4096], [14336, 14336],
-            [4096, 4096], [4096, 4096], [14336, 14336],
-            [4096, 4096], [4096, 4096], [14336, 14336],
-            [4096, 4096]
-        ]},
 }
 
 
@@ -222,7 +159,7 @@ class WeightPredictor(object):
         for ilayer in range(1, self.num_layers):
             for iweight in range(self.num_weights):
                 predictor_model = self.predictors[ilayer][iweight]
-                if predictor_model is not None:
+                if self.predictors[ilayer][iweight] is not None:
                     self.predictors[ilayer][iweight] = predictor_model.to(torch.float16)
 
     def to_bf16(self):
@@ -252,46 +189,25 @@ class WeightPredictor(object):
         self.preds[ilayer][iweight].data = preds.data
         return preds
 
-    def set_sparsity_threshold(self, file_path) :
+    def set_sparsity_threshold(self, file_path=None) :
+        if file_path == None :
+            file_path = os.environ.get('SPARSITY_PATH',None)
         print('threshold_path', file_path)
         self.threshold = [[0.0] * 7 for _ in range(self.num_layers)]  # 7 个阈值：q, k, v, o, gate, up, down
-        # 从文件中加载数据
-        with open(file_path, 'r') as f:
-            sparsity_all_dict = json.load(f)
-
-        # 遍历每一层
-        for i in range(self.num_layers):
-            layer_key = f"{i}"
-            if layer_key in sparsity_all_dict:
-                layer_thresholds = sparsity_all_dict[layer_key]
-                # 按顺序加载 q, k, v, o, gate, up, down
-                self.threshold[i][0] = layer_thresholds.get("q", 0.0)
-                self.threshold[i][1] = layer_thresholds.get("k", 0.0)
-                self.threshold[i][2] = layer_thresholds.get("v", 0.0)
-                self.threshold[i][3] = layer_thresholds.get("o", 0.0)
-                self.threshold[i][4] = layer_thresholds.get("gate", 0.0)
-                self.threshold[i][5] = layer_thresholds.get("up", 0.0)
-                self.threshold[i][6] = layer_thresholds.get("down", 0.0)
-            
-    # def predict_with_top_k(self, ilayer, iweight, x, sp):
-    #     if ilayer >= self.num_layers:
-    #         return None
-    #     if sp <= 0.0 or sp > 1.0:
-    #         return torch.ones(x.shape, dtype=x.dtype, device=x.device)
-    #     org_shape = x.shape
-    #     if len(org_shape) == 3:
-    #         x = x.reshape((-1, x.shape[-1]))
-    #     logits = x.abs()
-    #     thres = logits.sort(dim=-1).values[:, int(logits.shape[-1] * 1.0 * sp)].view(logits.shape[0], 1)
-    #     preds = logits >= thres
-    #     preds = preds.reshape(org_shape).to(torch.int64)
-    #     #if len(org_shape) == 3:
-    #     #    preds.data[:, 0, :] = 1
-    #     #if ilayer >= 0:
-    #     #    preds.data[:, :, :] = 1
-    #     #print(f"il {ilayer}, iw {iweight}, preds_sp {calc_sparsity(preds)}")
-    #     #self.preds[ilayer][iweight].data = preds.data
-
+        if file_path == None :
+            pass
+        else :
+            with open(file_path, 'r') as f:
+                sparsity_all_dict = json.load(f)
+            # 遍历每一层
+            for i in range(self.num_layers):
+                layer_key = f"{i}"
+                if layer_key in sparsity_all_dict:
+                    layer_thresholds = sparsity_all_dict[layer_key]
+                    # 按顺序加载 q, k, v, o, gate, up, down
+                    for j in range(7) :
+                        self.threshold[i][j] = layer_thresholds.get(BLOCK_NAME[j], 0.0)
+         
     def score_to_mask(self, x, sp, thres=0.0):
         # Dynamic TOP-K
         if os.environ.get('SPARSITY') == 'Dynamic' :
@@ -315,59 +231,42 @@ class WeightPredictor(object):
 
     def predict_by_x_thres(self, ilayer, iweight, x, sp, w_mask_p=-1.0):
         # print('predict_by_x_thres', ilayer, iweight , sp ,w_mask_p)
+
         if ilayer >= self.num_layers:
             return None
 
-        out_preds = None
-        if self.preds[ilayer][iweight] is not None:
-            #print(f"il {ilayer}, iw {iweight}, get_pre_pred")
-            out_preds = self.preds[ilayer][iweight]
+        out_preds = self.preds[ilayer][iweight] if self.preds[ilayer][iweight] is not None else None
+
 
         # Prediction.
         x = x.abs()
-        preds = self.score_to_mask(x, sp, self.threshold[ilayer][iweight])
+        threshold = self.threshold[ilayer][iweight]
+        preds = self.score_to_mask(x, sp, threshold)
         # print(x.size(),preds.size())
-        if w_mask_p >= 0.0 and w_mask_p <= 1.0:
+        if 0.0 <= w_mask_p <= 1.0:
             if w_mask_p > 0.0:
-                wmetrics = self.wmetrics[ilayer][iweight]
-                w_mask = self.score_to_mask(wmetrics, 1 - w_mask_p, self.threshold[ilayer][iweight])
+                w_mask = self.score_to_mask(self.wmetrics[ilayer][iweight], 1 - w_mask_p, threshold)
                 preds = self.combine_mask(preds, w_mask.to(preds.device))
         elif w_mask_p == 2.0:
-            #print(f"il {ilayer}, iw {iweight}")
-            wmetrics = self.wmetrics[ilayer][iweight]
-            # print('wmetric ', wmetrics.size() , sp)
-            preds = self.score_to_mask(x * wmetrics.to(x.device), sp, self.threshold[ilayer][iweight])
-        # print('out ' , out_preds.size() if out_preds != None else 'None ',preds.size())
-        if out_preds is None:
-            out_preds = preds
-
-        # Calculate sparsity of prediction.
+            preds = self.score_to_mask(x * self.wmetrics[ilayer][iweight].to(x.device), sp, threshold)
+            
+        # sparsity_params
         preds_sp = calc_sparsity(preds).item()
-        import math
         if not math.isnan(preds_sp):
             self.sparsity_accum[0] += preds_sp
             self.sparsity_accum[1] += 1
-            #print(f"il {ilayer}, iw {iweight}, preds_sp {preds_sp}")
-        #self.preds[ilayer][iweight].data = preds.data
 
-        # Preprediction.
+        # predictor
         if self.do_pre_prediction and ilayer < self.num_layers - 1:
-            #if (ilayer > 1 and ilayer < self.num_layers - 1) and (iweight in [0, 1, 2, 4, 5]):
-            #    self.preds[ilayer+1][iweight] = preds
             prec = 0.0
             if iweight in [0, 1, 2]:
                 prec = float(self.attn_inp_prepred_precs[ilayer])
             elif iweight in [4, 5]:
                 prec = float(self.mlp_inp_prepred_precs[ilayer])
-            #print(f"il {ilayer}, iw {iweight}, prec {prec}")
-            if prec > 0.7:
-                #print(f"il {ilayer}, iw {iweight}, pre_pred")
-                self.preds[ilayer+1][iweight] = preds
 
-        promt_len = 0
-        if promt_len > 0:
-            out_preds.data[:, :promt_len, :] = 1
-        return out_preds
+            if prec > 0.7:
+                self.preds[ilayer + 1][iweight] = preds
+        return out_preds if out_preds is not None else preds
 
     def predict_heads(self, ilayer, iweight, x, head_dim, head_percent=0.5):
         #print(f"Predict: ilayer {ilayer}, iweight {iweight}")
@@ -497,53 +396,39 @@ global_enable_attention_predictor = True
 def is_weight_predictor_enabled():
     return os.environ.get("ENABLE_PREDICTOR", "0") == "1"
 
-
-def is_weight_predictor_finetune_enabled():
-    return os.environ.get("ENABLE_PREDICTOR_FINETUNE", "0") == "1"
-
-
 def is_sparse_infer():
     return os.environ.get("ENABLE_SPARSE_INFER", "0") == "1"
-
 
 def _init_weight_predictor():
     global global_weight_preditor
     global MODEL_CONFIGS
     if global_weight_preditor is not None:
-        return
+        raise KeyError('global_weight_preditor')
     model_name = os.environ["MODEL_NAME"]
-    if "-ft" in model_name:
-        model_name = model_name[:model_name.find("-ft")]
     for config in MODEL_CONFIGS :
-        if model_name.startswith(config):
+        if config in model_name:
             model_name = config
-    if model_name.startswith('Mixtral'):
-        model_name = 'Mixtral-8x7B-Instruct'
+            break
     print(model_name)
     dataset_name = "c4"
     dtype = torch.float32
-    local_rank = os.environ["LOCAL_RANK"]
+    local_rank = os.environ.get("LOCAL_RANK","-1")
     if local_rank != "-1":
         device = torch.device(f"cuda:{local_rank}")
     else:
         device = torch.device("cuda:0")
-    predictor_ckpt_path = os.environ["PREDICT_CKPT_HOME"]
+    
     D = 1024
-    checkpoint_dir = os.path.join(predictor_ckpt_path)
     print("Create and load preditor...")
     print("Local device:", device)
-    print("Checkpoint dir:", checkpoint_dir)
+    # print("Checkpoint dir:", checkpoint_dir)
     global_weight_preditor = WeightPredictor(
         model_name, dataset_name=dataset_name, dtype=dtype, device=device, D=D
     )
-    #global_weight_preditor.load(checkpoint_dir)
     if local_rank != "-1":
-        #global_weight_preditor.to_fp16()
         global_weight_preditor.to_bf16()
-        global_weight_preditor.set_requires_grad(is_weight_predictor_finetune_enabled())
     else:
         global_weight_preditor.to_bf16()
-    #global_weight_preditor.print_weight()
 
 
 if is_weight_predictor_enabled():

@@ -47,7 +47,6 @@ from transformers.utils import (
 )
 from ...weight_predictor import (
     global_weight_preditor,
-    is_weight_predictor_finetune_enabled,
     is_sparse_infer,
     global_attn_prob_threshold,
     global_mlp_prob_threshold,
