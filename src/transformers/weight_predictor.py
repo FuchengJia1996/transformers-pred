@@ -127,6 +127,7 @@ class WeightPredictor(object):
         self.dtype = dtype
         self.device = device
         self.D = D
+        self.sparsity_strategy = 'Dynamic'
         self.num_layers = MODEL_CONFIGS[model_name]["num_layers"]
         self.num_weights = MODEL_CONFIGS[model_name]["num_weights"]
         self.pred_sizes = MODEL_CONFIGS[model_name]["pred_sizes"]
@@ -191,15 +192,14 @@ class WeightPredictor(object):
 
     def set_sparsity_threshold(self, file_path=None) :
         if file_path == None :
-            file_path = os.environ.get('SPARSITY_PATH',None)
+            file_path = os.environ.get('THRESHOLD_PATH',None)
+        # if file_path == None : 
+        #     file_path = f'./threshold/{self.model_name}/{self.model_name}-{self.get_attn_sp()}.txt'
         print('threshold_path', file_path)
         self.threshold = [[0.0] * 7 for _ in range(self.num_layers)]  # 7 个阈值：q, k, v, o, gate, up, down
-        if file_path == None :
-            pass
-        else :
+        if os.path.exists(file_path):
             with open(file_path, 'r') as f:
                 sparsity_all_dict = json.load(f)
-            # 遍历每一层
             for i in range(self.num_layers):
                 layer_key = f"{i}"
                 if layer_key in sparsity_all_dict:
@@ -207,16 +207,21 @@ class WeightPredictor(object):
                     # 按顺序加载 q, k, v, o, gate, up, down
                     for j in range(7) :
                         self.threshold[i][j] = layer_thresholds.get(BLOCK_NAME[j], 0.0)
+            self.sparsity_strategy = 'Static'
+        else:
+            self.sparsity_strategy = 'Dynamic'
+            
          
     def score_to_mask(self, x, sp, thres=0.0):
         # Dynamic TOP-K
-        if os.environ.get('SPARSITY') == 'Dynamic' :
+        if self.sparsity_strategy == 'Dynamic' :
             if len(x.shape) == 2:
                 thres = x.sort(dim=-1).values[:, int(x.shape[-1] * 1.0 * sp)].view(x.shape[0], 1)
             elif len(x.shape) == 3:
                 thres = x.sort(dim=-1).values[:, :, int(x.shape[-1] * 1.0 * sp)].view(x.shape[0], x.shape[1], 1)
             else:
                 raise ValueError("Length of x shape must be 2 or 3")
+        # Static Top_K
         else :
             thres = thres
         mask = x >= thres
