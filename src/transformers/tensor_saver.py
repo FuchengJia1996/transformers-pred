@@ -8,6 +8,7 @@ class TensorSaver(object):
     def __init__(self, model_name, dataset_name):
         self.model_name = model_name
         self.dataset_name = dataset_name
+        self.cur_sample_idx = 0
         self.cur_seq_idx = 0
 
     def save(self, tensor, ilayer, name):
@@ -25,16 +26,22 @@ class TensorSaver(object):
         if tensor.dtype == torch.bfloat16:
             tensor = tensor.to(torch.float16)
         num_tokens = tensor.shape[-2]
+
+        sample_idx = int(os.environ["TENSOR_SAMPLE_ID"])
+        if sample_idx > self.cur_sample_idx:
+            self.cur_sample_idx = sample_idx
+            self.cur_seq_idx = 0
         seq_idx = self.cur_seq_idx
         for i in range(num_tokens):
             #print(f"seqidx {seq_idx}, ilayer {ilayer}, name {name}")
-            if num_tokens == 1:
-                filename = f"s{seq_idx}-l{ilayer}-{name}.npy"
+            if os.environ["ENABLE_SPARSE_INFER"] == "1":
+                filename = f"i{sample_idx}-s{seq_idx}-l{ilayer}-{name}.npy"
                 filepath = os.path.join(save_dir, filename)
                 t_arr = tensor[0, i].cpu().detach().numpy()
-                if ilayer == 0:
-                    print("")
-                print(f"Save {filename}, shape {t_arr.shape}", end="\r")
+                print(f"Save {filename}, shape {t_arr.shape}")
+                #if ilayer == 0:
+                #    print("")
+                #print(f"Save {filename}, shape {t_arr.shape}", end="\r")
                 np.save(filepath, t_arr)
             seq_idx += 1
 
@@ -43,13 +50,16 @@ class TensorSaver(object):
         save_dir = os.environ["TENSOR_SAVE_DIR"]
         if not os.path.exists(save_dir):
             os.makedirs(save_dir)
-        filename = f"s{seq_idx}-l{ilayer}-{name}.npy"
-        filepath = os.path.join(save_dir, filename)
-        t_arr = tensor[0].cpu().detach().numpy()
-        if ilayer == 0:
-            print("")
-        print(f"Save {filename}, shape {t_arr.shape}", end="\r")
-        np.save(filepath, t_arr)
+        sample_idx = int(os.environ["TENSOR_SAMPLE_ID"])
+        if os.environ["ENABLE_SPARSE_INFER"] == "1":
+            filename = f"i{sample_idx}-s{seq_idx}-l{ilayer}-{name}.npy"
+            filepath = os.path.join(save_dir, filename)
+            t_arr = tensor[0].cpu().detach().numpy()
+            print(f"Save {filename}, shape {t_arr.shape}")
+            #if ilayer == 0:
+            #    print("")
+            #print(f"Save {filename}, shape {t_arr.shape}", end="\r")
+            np.save(filepath, t_arr)
 
     def add_seq(self, ns):
         self.cur_seq_idx += ns

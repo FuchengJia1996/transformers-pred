@@ -385,18 +385,32 @@ class MixtralAttention(nn.Module):
             )
 
         if attention_mask is not None:
+            print(f"attn_mask_size {attention_mask.size()}, right_size {(bsz, 1, q_len, kv_seq_len)}")
             if attention_mask.size() != (bsz, 1, q_len, kv_seq_len):
                 # raise ValueError(
                 #     f"Attention mask should be of size {(bsz, 1, q_len, kv_seq_len)}, but is {attention_mask.size()}"
                 # )
-                
-                print(attention_mask.size())
                 if attention_mask.size(-1) < kv_seq_len:
                     pad_size = kv_seq_len - attention_mask.size(-1)
-                    attention_mask = F.pad(attention_mask, (0, pad_size), value=float('-inf'))
-                else :
+                    #attention_mask = F.pad(attention_mask, (pad_size, 0), value=0)
+                    attention_mask = torch.cat([torch.zeros(
+                        bsz, 1, q_len, pad_size, dtype=attention_mask.dtype, device=attention_mask.device), attention_mask], dim=-1)
+                    '''
+                    for qi in range(q_len):
+                        for qj in range(0, q_len):
+                            attention_mask[0, 0, qi, qj] = 0
+                        for qj in range(q_len, kv_seq_len):
+                            attention_mask[0, 0, qi, qj] = float('-inf')
+                    '''
+                    #mask_cond = torch.arange(kv_seq_len, device=attention_mask.device)
+                    #mask_cond = mask_cond < (mask_cond + 1).view(kv_seq_len, 1)
+                    #mask_cond = mask_cond[pad_size:, :].view(q_len, -1)
+                    #attention_mask.masked_fill_(mask_cond, 0)
+                else:
+                    raise ValueError("Failed")
                     attention_mask = attention_mask[:,:,:,:kv_seq_len]
                 # attention_mask = attention_mask[bsz,1,q_len,:kv_seq_len]
+            print(f"attention_mask {attention_mask}")
             attn_weights = attn_weights + attention_mask
 
         # upcast attention to fp32

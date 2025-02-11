@@ -321,7 +321,7 @@ class WeightPredictor(object):
             raise ValueError("Length of x shape must be 2 or 3")
         mask = x >= thres
         mask = mask.to(torch.int64)
-        print(f"mask_shape {mask.shape}")
+        #print(f"mask_shape {mask.shape}")
         return mask
 
     def combine_mask(self, x_mask, w_mask):
@@ -441,7 +441,7 @@ class WeightPredictor(object):
             #pred = self.get_pred(ilayer, iweight)
             return x
         #print(f"il {ilayer}, iw {iweight}, preds_sp {calc_sparsity(pred)}")
-        print(f"x_shape {x.shape}, pred_shape {pred.shape}")
+        #print(f"x_shape {x.shape}, pred_shape {pred.shape}")
         return x * pred.to(x.dtype).to(x.device)
 
     def eval(self, ilayer, iweight, x, y, sparsity_ratio):
