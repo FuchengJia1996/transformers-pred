@@ -13,7 +13,7 @@ class TensorSaver(object):
     def save(self, tensor, ilayer, name):
         #if name != "mask_gate":
         #    return
-        save_dir = os.environ["TENSOR_SAVE_DIR"]
+        save_dir = os.environ.get("TENSOR_SAVE_DIR")
         if not os.path.exists(save_dir):
             os.makedirs(save_dir)
         if len(tensor.shape) == 3:
@@ -44,12 +44,12 @@ global_tensor_saver = None
 
 
 def is_tensor_saver_enabled():
-    return os.environ["ENABLE_TENSOR_SAVER"] is not None and os.environ["ENABLE_TENSOR_SAVER"] == "1"
+    return os.environ.get("ENABLE_TENSOR_SAVER",'0') == "1"
 
 
 def _init_tensor_saver():
     global global_tensor_saver
-    model_name = os.environ["MODEL_NAME"]
+    model_name = os.environ.get("MODEL_NAME")
     dataset_name = "c4"
     global_tensor_saver = TensorSaver(model_name, dataset_name)
 

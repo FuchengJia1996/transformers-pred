@@ -210,7 +210,7 @@ class WeightPredictor(object):
             self.sparsity_strategy = 'Static'
         else:
             self.sparsity_strategy = 'Dynamic'
-            
+        print('sparsity_strategy : ', self.sparsity_strategy)
          
     def score_to_mask(self, x, sp, thres=0.0):
         # Dynamic TOP-K
