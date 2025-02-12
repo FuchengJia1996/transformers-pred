@@ -214,16 +214,30 @@ class WeightPredictor(object):
          
     def score_to_mask(self, x, sp, thres=0.0):
         # Dynamic TOP-K
-        if self.sparsity_strategy == 'Dynamic' :
-            if len(x.shape) == 2:
-                thres = x.sort(dim=-1).values[:, int(x.shape[-1] * 1.0 * sp)].view(x.shape[0], 1)
-            elif len(x.shape) == 3:
-                thres = x.sort(dim=-1).values[:, :, int(x.shape[-1] * 1.0 * sp)].view(x.shape[0], x.shape[1], 1)
-            else:
-                raise ValueError("Length of x shape must be 2 or 3")
+        b = thres
+        # if self.sparsity_strategy == 'Dynamic' or True:
+        if len(x.shape) == 2:
+            thres = x.sort(dim=-1).values[:, int(x.shape[-1] * 1.0 * sp)].view(x.shape[0], 1)
+        elif len(x.shape) == 3:
+            thres = x.sort(dim=-1).values[:, :, int(x.shape[-1] * 1.0 * sp)].view(x.shape[0], x.shape[1], 1)
+        else:
+            raise ValueError("Length of x shape must be 2 or 3")
+        a = thres
         # Static Top_K
+        # else :
+        #     thres = thres
+            
+        if self.sparsity_strategy == 'Dynamic' :
+            thres = a
+        elif self.sparsity_strategy == 'Static' :
+            thres = b
+        elif self.sparsity_strategy == 'Mixmin' :
+            thres = torch.minimum(a, b)  # Element-wise maximum for tensors
+        elif self.sparsity_strategy == 'Mixmax' :
+            thres = torch.maximum(a, b)  # Element-wise maximum for tensors
         else :
-            thres = thres
+            thres = b
+            
         mask = x >= thres
         mask = mask.to(torch.int64)
         return mask
@@ -387,6 +401,8 @@ class WeightPredictor(object):
             return self.sparsity_accum[0] * 1.0 / self.sparsity_accum[1]
         else:
             return -1
+    def set_sparsity_strategy(self, method: str) :
+        self.sparsity_strategy = method
 
 
 global_weight_preditor = None
