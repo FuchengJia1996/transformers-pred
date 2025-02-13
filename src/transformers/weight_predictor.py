@@ -119,6 +119,21 @@ def score_to_mask(score, sparsity_ratio):
 def calc_sparsity(inp):
     return (inp.numel() - inp.count_nonzero()) / inp.numel()
 
+class STEFunction(torch.autograd.Function):
+    """
+    Straight-Through Estimator (STE) for the backward pass.
+    The forward pass multiplies the input by a mask, and the backward pass
+    simply passes the gradient through without modification.
+    """
+    @staticmethod
+    def forward(ctx, input, mask):
+        # Forward pass: apply the mask to the input
+        return input * mask
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        # Backward pass: pass the gradient through without modification
+        return grad_output, None  # STE: pass gradient through without modification
 
 class WeightPredictor(object):
     def __init__(self, model_name, dataset_name, dtype=torch.float32, device=torch.device("cuda:0"), D=1024):
@@ -314,15 +329,15 @@ class WeightPredictor(object):
         #    return None
         return self.preds[ilayer][iweight]
 
-    def apply_pred(self, ilayer, iweight, x, pred=None):
-        if ilayer < 0 or pred is None:
+    def apply_pred(self, x, pred=None):
+        if pred is None:
             return x
         return x * pred.to(x.dtype).to(x.device)
     
     def generate_pred(self, ilayer, iweight, x) :
         sp = self.attn_sp if iweight < 4 else self.mlp_sp
         pred = self.predict_by_x_thres(ilayer, iweight, x, sp, self.get_w_p())
-        return self.apply_pred(ilayer, iweight, x, pred)
+        return STEFunction.apply(x, pred)
 
     def eval(self, ilayer, iweight, x, y, sparsity_ratio):
         #pred = self.get_pred(ilayer, iweight)
@@ -403,6 +418,7 @@ class WeightPredictor(object):
             return -1
     def set_sparsity_strategy(self, method: str) :
         self.sparsity_strategy = method
+        print('sparsity_strategy: ', method)
 
 
 global_weight_preditor = None
