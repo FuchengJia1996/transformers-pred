@@ -265,7 +265,7 @@ class WeightPredictor(object):
         else :
             thres = b
 
-        r = os.environ.get('Activate_Layer' , '0') 
+        r = os.environ.get('ACTIVATE_LAYER' , '0') 
         if ilayer <= int(r):
             mask = x >= 0
         else :
@@ -353,7 +353,7 @@ class WeightPredictor(object):
     def generate_pred(self, ilayer, iweight, x) :
         sp = self.attn_sp if iweight < 4 else self.mlp_sp
         pred = self.predict_by_x_thres(ilayer, iweight, x, sp, self.get_w_p())
-        if os.environ.get('Backward_Strategy','0') != '0' :
+        if os.environ.get('BACKWARD_STRATEGY','0') != '0' :
             return self.apply_pred(x, pred)
         else : 
             return STEFunction.apply(x, pred)
