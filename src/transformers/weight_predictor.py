@@ -132,8 +132,20 @@ class STEFunction(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, grad_output):
-        # Backward pass: pass the gradient through without modification
-        return grad_output, None  # STE: pass gradient through without modification
+         # Retrieve the saved mask
+        mask, = ctx.saved_tensors
+        # Backward pass: multiply grad_output by the mask
+        grad_input = grad_output * mask
+
+        # Calculate the zero ratio of grad_output
+        zero_count = (grad_output == 0).sum().item()
+        total_elements = grad_output.numel()
+        zero_ratio = zero_count / total_elements
+
+        # Print the zero ratio of grad_output
+        print(f"Grad output zero ratio: {zero_ratio:.4f}")
+
+        return grad_input, None  # Return gradient for input and None for mask
 
 class WeightPredictor(object):
     def __init__(self, model_name, dataset_name, dtype=torch.float32, device=torch.device("cuda:0"), D=1024):
@@ -172,7 +184,7 @@ class WeightPredictor(object):
 
     def to_fp16(self):
         self.dtype = torch.float16
-        for ilayer in range(1, self.num_layers):
+        for ilayer in range(1, self.num_layers) :
             for iweight in range(self.num_weights):
                 predictor_model = self.predictors[ilayer][iweight]
                 if self.predictors[ilayer][iweight] is not None:
@@ -227,7 +239,7 @@ class WeightPredictor(object):
             self.sparsity_strategy = 'Dynamic'
         print('sparsity_strategy : ', self.sparsity_strategy)
          
-    def score_to_mask(self, x, sp, thres=0.0):
+    def score_to_mask(self, x, sp, thres=0.0, ilayer=-1):
         # Dynamic TOP-K
         b = thres
         # if self.sparsity_strategy == 'Dynamic' or True:
@@ -252,8 +264,12 @@ class WeightPredictor(object):
             thres = torch.maximum(a, b)  # Element-wise maximum for tensors
         else :
             thres = b
-            
-        mask = x >= thres
+
+        r = os.environ.get('Activate_Layer' , '0') 
+        if ilayer <= int(r):
+            mask = x >= 0
+        else :
+            mask =  x >= thres
         mask = mask.to(torch.int64)
         return mask
 
@@ -275,7 +291,7 @@ class WeightPredictor(object):
         # Prediction.
         x = x.abs()
         threshold = self.threshold[ilayer][iweight]
-        preds = self.score_to_mask(x, sp, threshold)
+        preds = self.score_to_mask(x, sp, threshold, ilayer)
         # print(x.size(),preds.size())
         if 0.0 <= w_mask_p <= 1.0:
             if w_mask_p > 0.0:
@@ -337,7 +353,11 @@ class WeightPredictor(object):
     def generate_pred(self, ilayer, iweight, x) :
         sp = self.attn_sp if iweight < 4 else self.mlp_sp
         pred = self.predict_by_x_thres(ilayer, iweight, x, sp, self.get_w_p())
-        return STEFunction.apply(x, pred)
+        if os.environ.get('Backward_Strategy','0') != '0' :
+            return self.apply_pred(x, pred)
+        else : 
+            return STEFunction.apply(x, pred)
+    # a->b(sparse)->c  a to b sparse b to c 实际的M
 
     def eval(self, ilayer, iweight, x, y, sparsity_ratio):
         #pred = self.get_pred(ilayer, iweight)

@@ -358,7 +358,8 @@ class LlamaSparseMLP(nn.Module):
                 if global_tensor_saver is not None:
                     global_tensor_saver.save(x, self.layer_idx, "downi")
                 down_proj = self.down_proj(x)
-
+                
+        # down_proj.register_hook(hook)  # `注册钩子`
         return down_proj
 
 
