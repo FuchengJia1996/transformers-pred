@@ -132,20 +132,7 @@ class STEFunction(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, grad_output):
-         # Retrieve the saved mask
-        mask, = ctx.saved_tensors
-        # Backward pass: multiply grad_output by the mask
-        grad_input = grad_output * mask
-
-        # Calculate the zero ratio of grad_output
-        zero_count = (grad_output == 0).sum().item()
-        total_elements = grad_output.numel()
-        zero_ratio = zero_count / total_elements
-
-        # Print the zero ratio of grad_output
-        print(f"Grad output zero ratio: {zero_ratio:.4f}")
-
-        return grad_input, None  # Return gradient for input and None for mask
+        return grad_output, None  # Return gradient for input and None for mask
 
 class WeightPredictor(object):
     def __init__(self, model_name, dataset_name, dtype=torch.float32, device=torch.device("cuda:0"), D=1024):
@@ -240,33 +227,33 @@ class WeightPredictor(object):
         print('sparsity_strategy : ', self.sparsity_strategy)
          
     def score_to_mask(self, x, sp, thres=0.0, ilayer=-1):
-        # Dynamic TOP-K
+            # Dynamic TOP-K
         b = thres
-        # if self.sparsity_strategy == 'Dynamic' or True:
         if len(x.shape) == 2:
-            thres = x.sort(dim=-1).values[:, int(x.shape[-1] * 1.0 * sp)].view(x.shape[0], 1)
+            thres = x.sort(dim=-1).values[:, int(x.shape[-1] * sp)].view(x.shape[0], 1)
         elif len(x.shape) == 3:
-            thres = x.sort(dim=-1).values[:, :, int(x.shape[-1] * 1.0 * sp)].view(x.shape[0], x.shape[1], 1)
+            thres = x.sort(dim=-1).values[:, :, int(x.shape[-1] * sp)].view(x.shape[0], x.shape[1], 1)
         else:
             raise ValueError("Length of x shape must be 2 or 3")
         a = thres
-        # Static Top_K
-        # else :
-        #     thres = thres
-            
-        if self.sparsity_strategy == 'Dynamic' :
+
+        # 根据 sparsity_strategy 选择不同的阈值计算策略
+        if self.sparsity_strategy == 'Dynamic':
             thres = a
-        elif self.sparsity_strategy == 'Static' :
+        elif self.sparsity_strategy == 'Static':
             thres = b
-        elif self.sparsity_strategy == 'Mixmin' :
-            thres = torch.minimum(a, b)  # Element-wise maximum for tensors
-        elif self.sparsity_strategy == 'Mixmax' :
-            thres = torch.maximum(a, b)  # Element-wise maximum for tensors
-        else :
+        elif self.sparsity_strategy == 'Mixmin':
+            b_tensor = torch.tensor(b, device=a.device, dtype=a.dtype)
+            thres = torch.minimum(a, b_tensor)
+        elif self.sparsity_strategy == 'Mixmax':
+            b_tensor = torch.tensor(b, device=a.device, dtype=a.dtype)
+            thres = torch.maximum(a, b_tensor)
+        else:
             thres = b
 
         r = os.environ.get('ACTIVATE_LAYER' , '0') 
         if ilayer <= int(r):
+            # print('YES')
             mask = x >= 0
         else :
             mask =  x >= thres
