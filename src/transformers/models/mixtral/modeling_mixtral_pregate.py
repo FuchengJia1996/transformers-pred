@@ -51,6 +51,10 @@ from ...utils import (
     logging,
     replace_return_docstrings,
 )
+from ...weight_predictor import (
+    global_weight_preditor,
+    is_sparse_infer,
+)
 from ...utils.import_utils import is_torch_fx_available
 from .configuration_mixtral import MixtralConfig
 
@@ -330,9 +334,14 @@ class MixtralAttention(nn.Module):
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
         bsz, q_len, _ = hidden_states.size()
 
-        query_states = self.q_proj(hidden_states)
-        key_states = self.k_proj(hidden_states)
-        value_states = self.v_proj(hidden_states)
+        if global_weight_preditor is not None and is_sparse_infer():
+            query_states = self.q_proj(global_weight_preditor.generate_pred(self.layer_idx, 0, hidden_states))
+            key_states = self.k_proj(global_weight_preditor.generate_pred(self.layer_idx, 1, hidden_states))
+            value_states = self.v_proj(global_weight_preditor.generate_pred(self.layer_idx, 2, hidden_states))
+        else:
+            query_states = self.q_proj(hidden_states)
+            key_states = self.k_proj(hidden_states)
+            value_states = self.v_proj(hidden_states)
 
         query_states = query_states.view(bsz, q_len, self.num_heads, self.head_dim).transpose(1, 2)
         key_states = key_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
@@ -388,7 +397,10 @@ class MixtralAttention(nn.Module):
         attn_output = attn_output.transpose(1, 2).contiguous()
         attn_output = attn_output.reshape(bsz, q_len, self.hidden_size)
 
-        attn_output = self.o_proj(attn_output)
+        if global_weight_preditor is not None and is_sparse_infer():
+            attn_output = self.o_proj(global_weight_preditor.generate_pred(self.layer_idx, 3, attn_output))
+        else:
+            attn_output = self.o_proj(attn_output)
 
         if not output_attentions:
             attn_weights = None
@@ -797,8 +809,14 @@ class MixtralBlockSparseTop2MLP(nn.Module):
         self.act_fn = ACT2FN[config.hidden_act]
 
     def forward(self, hidden_states):
-        current_hidden_states = self.act_fn(self.w1(hidden_states)) * self.w3(hidden_states)
-        current_hidden_states = self.w2(current_hidden_states)
+        if global_weight_preditor is not None and is_sparse_infer():
+            x1 = self.w1(global_weight_preditor.generate_pred(self.layer_idx, 4 + self.expert_idx * 3, hidden_states))
+            x3 = self.w3(global_weight_preditor.generate_pred(self.layer_idx, 5 + self.expert_idx * 3, hidden_states))
+            current_hidden_states = self.act_fn(x1) * x3
+            current_hidden_states = self.w2(global_weight_preditor.generate_pred(self.layer_idx, 6 + self.expert_idx * 3, current_hidden_states))
+        else:
+            current_hidden_states = self.act_fn(self.w1(hidden_states)) * self.w3(hidden_states)
+            current_hidden_states = self.w2(current_hidden_states)
         return current_hidden_states
 
 
@@ -1091,7 +1109,12 @@ class MixtralModel(MixtralPreTrainedModel):
         self.norm = MixtralRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
 
         self.gradient_checkpointing = False
-        # Initialize weights and apply final processing
+        
+        self.global_weight_preditor = None
+        if global_weight_preditor is not None:
+            self.global_weight_preditor = global_weight_preditor
+        
+        # Initialize weights and apply final processing    
         self.post_init()
 
     def get_input_embeddings(self):

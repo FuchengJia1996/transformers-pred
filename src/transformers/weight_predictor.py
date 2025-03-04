@@ -17,7 +17,7 @@ BLOCK_NAME = [
 ]
 
 MODEL_CONFIGS = {
-    "Llama-2-7b": {
+    "Llama-2-7B": {
         "num_layers": 32, "num_weights": 7,
         "pred_sizes": [
             [4096, 4096], [4096, 4096], [4096, 4096], [4096, 4096],
@@ -160,14 +160,17 @@ class WeightPredictor(object):
         self.do_pre_prediction = 0
         self.attn_inp_prepred_precs = None
         self.mlp_inp_prepred_precs = None
+        self.similarity_results = []
         for ilayer in range(self.num_layers):
             self.predictors.append([])
             self.preds.append([])
             self.wmetrics.append([])
+            self.similarity_results.append([])
             for iweight in range(self.num_weights):
                 self.predictors[-1].append(None)
                 self.preds[-1].append(None)
                 self.wmetrics[-1].append(None)
+                self.similarity_results[-1].append([])
 
     def to_fp16(self):
         self.dtype = torch.float16
@@ -207,7 +210,8 @@ class WeightPredictor(object):
     def set_sparsity_threshold(self, file_path=None) :
         if file_path == None :
             file_path = os.environ.get('THRESHOLD_PATH',None)
-        # if file_path == None : 
+        if file_path == None : 
+            print('there is none this file.')
         #     file_path = f'./threshold/{self.model_name}/{self.model_name}-{self.get_attn_sp()}.txt'
         print('threshold_path', file_path)
         self.threshold = [[0.0] * 7 for _ in range(self.num_layers)]  # 7 个阈值：q, k, v, o, gate, up, down
@@ -252,13 +256,22 @@ class WeightPredictor(object):
             thres = b
 
         r = os.environ.get('ACTIVATE_LAYER' , '0') 
-        if ilayer <= int(r):
+        if ilayer >= 0 and ilayer <= int(r): # all activation in layer 0
             # print('YES')
-            mask = x >= 0
+            mask = x >= 0 
         else :
             mask =  x >= thres
         mask = mask.to(torch.int64)
-        return mask
+
+        # 计算稀疏系数 C
+        if mask.sum() > 0:  # 确保分母不为零
+            sum_all = x.sum()  # x 的全部元素和
+            sum_masked = (x * mask).sum()  # mask 中为 1 的位置对应的 x 的和
+            C = sum_all / sum_masked  # 稀疏系数 C
+        else:
+            C = 1.0  # 如果 mask 中没有激活值，为了避免除零，设置 C 为 1
+
+        return mask, C
 
     def combine_mask(self, x_mask, w_mask):
         m = x_mask + w_mask[0]
@@ -272,60 +285,69 @@ class WeightPredictor(object):
         if ilayer >= self.num_layers:
             return None
 
-        out_preds = self.preds[ilayer][iweight] if self.preds[ilayer][iweight] is not None else None
+        # out_preds = self.preds[ilayer][iweight] if self.preds[ilayer][iweight] is not None else None
+        out_preds = None
 
 
         # Prediction.
         x = x.abs()
         threshold = self.threshold[ilayer][iweight]
-        preds = self.score_to_mask(x, sp, threshold, ilayer)
-        # print(x.size(),preds.size())
-        if 0.0 <= w_mask_p <= 1.0:
-            if w_mask_p > 0.0:
-                w_mask = self.score_to_mask(self.wmetrics[ilayer][iweight], 1 - w_mask_p, threshold)
-                preds = self.combine_mask(preds, w_mask.to(preds.device))
-        elif w_mask_p == 2.0:
-            preds = self.score_to_mask(x * self.wmetrics[ilayer][iweight].to(x.device), sp, threshold)
+        preds, C = self.score_to_mask(x, sp, threshold, ilayer)
             
         # sparsity_params
         preds_sp = calc_sparsity(preds).item()
         if not math.isnan(preds_sp):
             self.sparsity_accum[0] += preds_sp
             self.sparsity_accum[1] += 1
-
+       
         # predictor
-        if self.do_pre_prediction and ilayer < self.num_layers - 1:
-            prec = 0.0
-            if iweight in [0, 1, 2]:
-                prec = float(self.attn_inp_prepred_precs[ilayer])
-            elif iweight in [4, 5]:
-                prec = float(self.mlp_inp_prepred_precs[ilayer])
+        if self.do_pre_prediction:
+            self.preds[ilayer][iweight] = preds
+            if ilayer > 0:
+                prev_preds = self.preds[ilayer - 1][iweight]
+                if prev_preds is not None:
+                    device = preds.device
+                    prev_preds = prev_preds.to(device)
+                    current_ones = preds.sum().item()
+                    if current_ones > 0:
+                        common_ones = (preds & prev_preds).sum().item()
+                        similarity = common_ones / current_ones
+                        # print(f'ilayer {ilayer} iweight {iweight} similarity {similarity}')
+                        self.similarity_results[ilayer][iweight].append(similarity)
+                    self.preds[ilayer - 1][iweight] = None # Clear
+                else :
+                    pass
+            # prec = 0.0
+            # if iweight in [0, 1, 2]:
+            #     prec = float(self.attn_inp_prepred_precs[ilayer])
+            # elif iweight in [4, 5]:
+            #     prec = float(self.mlp_inp_prepred_precs[ilayer])
 
-            if prec > 0.7:
-                self.preds[ilayer + 1][iweight] = preds
-        return out_preds if out_preds is not None else preds
+            # if prec > 0.7:
+            #     self.preds[ilayer + 1][iweight] = preds
+        return out_preds if out_preds is not None else preds, C
 
-    def predict_heads(self, ilayer, iweight, x, head_dim, head_percent=0.5):
-        #print(f"Predict: ilayer {ilayer}, iweight {iweight}")
-        if ilayer >= self.num_layers:
-            return None
-        predictor_model = self.predictors[ilayer][iweight]
-        logits = predictor_model(x.to(self.dtype).to(self.device))
-        bsz, q_len, hidden_size = x.size()
-        num_heads = hidden_size // head_dim
-        logits = logits.reshape(bsz, q_len, num_heads, head_dim)
-        logits = logits[0, -1].sum(dim=-1)
-        logit_indices = logits.argsort(dim=-1)
-        preds = torch.zeros((1, num_heads, head_dim), dtype=torch.int64, device=self.device)
-        for i in range(int(num_heads * (1.0 - head_percent)), num_heads):
-            ihead = logit_indices[i]
-            preds.data[0, ihead] = 1
-        preds = preds.reshape(1, num_heads * head_dim)
-        #print(f"x {x}")
-        #print(f"preds {preds}")
-        #preds = preds.to(torch.int64)
-        self.preds[ilayer][iweight].data = preds.data
-        return preds
+    # def predict_heads(self, ilayer, iweight, x, head_dim, head_percent=0.5):
+    #     #print(f"Predict: ilayer {ilayer}, iweight {iweight}")
+    #     if ilayer >= self.num_layers:
+    #         return None
+    #     predictor_model = self.predictors[ilayer][iweight]
+    #     logits = predictor_model(x.to(self.dtype).to(self.device))
+    #     bsz, q_len, hidden_size = x.size()
+    #     num_heads = hidden_size // head_dim
+    #     logits = logits.reshape(bsz, q_len, num_heads, head_dim)
+    #     logits = logits[0, -1].sum(dim=-1)
+    #     logit_indices = logits.argsort(dim=-1)
+    #     preds = torch.zeros((1, num_heads, head_dim), dtype=torch.int64, device=self.device)
+    #     for i in range(int(num_heads * (1.0 - head_percent)), num_heads):
+    #         ihead = logit_indices[i]
+    #         preds.data[0, ihead] = 1
+    #     preds = preds.reshape(1, num_heads * head_dim)
+    #     #print(f"x {x}")
+    #     #print(f"preds {preds}")
+    #     #preds = preds.to(torch.int64)
+    #     self.preds[ilayer][iweight].data = preds.data
+    #     return preds
 
     def get_pred(self, ilayer, iweight):
         #if ilayer == 0:
@@ -337,13 +359,59 @@ class WeightPredictor(object):
             return x
         return x * pred.to(x.dtype).to(x.device)
     
-    def generate_pred(self, ilayer, iweight, x) :
-        sp = self.attn_sp if iweight < 4 else self.mlp_sp
-        pred = self.predict_by_x_thres(ilayer, iweight, x, sp, self.get_w_p())
+    def generate_pred(self, ilayer, iweight, x, sp=None) :
+        if sp == None :
+            sp = self.attn_sp if iweight < 4 else self.mlp_sp
+        else :
+            sp = sp
+        pred, C = self.predict_by_x_thres(ilayer, iweight, x, sp, self.get_w_p())
+
+        # print(pred)
+        if os.environ.get('DEBUG_CROSSLAYER','0') != '0' :
+            pass
+            # if self.wmetrics[ilayer][iweight] == None :
+            #     self.wmetrics[ilayer][iweight] = torch.zeros(pred.size(-1), device='cpu')
+
+            # # 将 pred 转移到 CPU
+            # pred1 = pred.to('cpu')
+
+            # # 更新 wmetric
+            # compressed_pred = pred1.sum(dim=1).sum(dim=0)  # 或者使用 sum: pred1.sum(dim=1)
+
+            # print(pred1)
+
+            # # 更新 wmetric
+            # self.wmetrics[ilayer][iweight] = self.wmetrics[ilayer][iweight] + compressed_pred
+
+        # print("Sparsity Coefficient (C):", C)
+
+        # # 计算乘/不乘 C 后的预测结果
+        if os.environ.get('DEBUG_CROSSLAYER','0') != '0' :
+            print('Attention_QKV', C, ilayer , iweight)
+            if os.environ.get('BACKWARD_STRATEGY', '0') != '0':
+                output_with_C = self.apply_pred(x * C, pred)
+                output_without_C = self.apply_pred(x, pred)
+            else:
+                output_with_C = STEFunction.apply(x * C, pred)
+                output_without_C = STEFunction.apply(x, pred)
+
+            # 计算差异性指标
+            diff_l1 = torch.norm(x - output_without_C, p=1)  # L1 范数
+            diff_l2 = torch.norm(x - output_without_C, p=2)  # L2 范数
+            mse = torch.mean((x - output_without_C) ** 2)    # 均方误差
+
+            # 打印差异性指标
+            print(f"L1 difference between output_with_C and output_without_C: {diff_l1.item()}")
+            print(f"L2 difference between output_with_C and output_without_C: {diff_l2.item()}")
+            print(f"MSE between output_with_C and output_without_C: {mse.item()}")
+
         if os.environ.get('BACKWARD_STRATEGY','0') != '0' :
             return self.apply_pred(x, pred)
         else : 
-            return STEFunction.apply(x, pred)
+            if iweight <= 2 and False:
+                return STEFunction.apply(x * C, pred)
+            else :
+                return STEFunction.apply(x, pred)
     # a->b(sparse)->c  a to b sparse b to c 实际的M
 
     def eval(self, ilayer, iweight, x, y, sparsity_ratio):
@@ -450,7 +518,7 @@ def _init_weight_predictor():
         raise KeyError('global_weight_preditor')
     model_name = os.environ["MODEL_NAME"]
     for config in MODEL_CONFIGS :
-        if config in model_name:
+        if config.lower() in model_name.lower():
             model_name = config
             break
     print(model_name)

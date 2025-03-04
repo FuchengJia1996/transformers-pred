@@ -54,12 +54,6 @@ from ...utils import (
 from ...weight_predictor import (
     global_weight_preditor,
     is_sparse_infer,
-    global_attn_prob_threshold,
-    global_mlp_prob_threshold,
-    global_attn_sp,
-    global_mlp_sp,
-    global_w_mask_p,
-    global_enable_attention_predictor,
 )
 from ...utils.import_utils import is_torch_fx_available
 from .configuration_mixtral import MixtralConfig
@@ -342,10 +336,9 @@ class MixtralAttention(nn.Module):
         bsz, q_len, _ = hidden_states.size()
 
         if global_weight_preditor is not None and is_sparse_infer():
-            pred = global_weight_preditor.predict_by_x_thres(self.layer_idx, 0, hidden_states, global_weight_preditor.get_attn_sp(), global_weight_preditor.get_w_p())
-            query_states = self.q_proj(global_weight_preditor.apply_pred(self.layer_idx, 0, hidden_states, pred))
-            key_states = self.k_proj(global_weight_preditor.apply_pred(self.layer_idx, 0, hidden_states, pred))
-            value_states = self.v_proj(global_weight_preditor.apply_pred(self.layer_idx, 0, hidden_states, pred))
+            query_states = self.q_proj(global_weight_preditor.generate_pred(self.layer_idx, 0, hidden_states))
+            key_states = self.k_proj(global_weight_preditor.generate_pred(self.layer_idx, 1, hidden_states))
+            value_states = self.v_proj(global_weight_preditor.generate_pred(self.layer_idx, 2, hidden_states))
         else:
             query_states = self.q_proj(hidden_states)
             key_states = self.k_proj(hidden_states)
@@ -413,8 +406,7 @@ class MixtralAttention(nn.Module):
         attn_output = attn_output.reshape(bsz, q_len, self.hidden_size)
 
         if global_weight_preditor is not None and is_sparse_infer():
-            pred = global_weight_preditor.predict_by_x_thres(self.layer_idx, 3, attn_output, global_weight_preditor.get_attn_sp(), global_weight_preditor.get_w_p())
-            attn_output = self.o_proj(global_weight_preditor.apply_pred(self.layer_idx, 3, attn_output, pred))
+            attn_output = self.o_proj(global_weight_preditor.generate_pred(self.layer_idx, 3, attn_output))
         else:
             attn_output = self.o_proj(attn_output)
 
@@ -828,24 +820,10 @@ class MixtralBlockSparseTop2MLP(nn.Module):
 
     def forward(self, hidden_states):
         if global_weight_preditor is not None and is_sparse_infer():
-            pred = global_weight_preditor.predict_by_x_thres(
-                self.layer_idx,
-                4 + self.expert_idx * 3,
-                hidden_states,
-                global_weight_preditor.get_mlp_sp(),
-                global_weight_preditor.get_w_p()
-            )
-            x1 = self.w1(global_weight_preditor.apply_pred(self.layer_idx, 4, hidden_states, pred))
-            x3 = self.w3(global_weight_preditor.apply_pred(self.layer_idx, 4, hidden_states, pred))
+            x1 = self.w1(global_weight_preditor.generate_pred(self.layer_idx, 4 + self.expert_idx * 3, hidden_states))
+            x3 = self.w3(global_weight_preditor.generate_pred(self.layer_idx, 5 + self.expert_idx * 3, hidden_states))
             current_hidden_states = self.act_fn(x1) * x3
-            pred = global_weight_preditor.predict_by_x_thres(
-                self.layer_idx,
-                6 + self.expert_idx * 3,
-                current_hidden_states,
-                global_weight_preditor.get_mlp_sp(),
-                global_weight_preditor.get_w_p()
-            )
-            current_hidden_states = self.w2(global_weight_preditor.apply_pred(self.layer_idx, 6, current_hidden_states, pred))
+            current_hidden_states = self.w2(global_weight_preditor.generate_pred(self.layer_idx, 6 + self.expert_idx * 3, current_hidden_states))
         else:
             current_hidden_states = self.act_fn(self.w1(hidden_states)) * self.w3(hidden_states)
             current_hidden_states = self.w2(current_hidden_states)
