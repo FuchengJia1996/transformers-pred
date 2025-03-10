@@ -5,120 +5,175 @@ import numpy as np
 from tqdm import tqdm
 import json
 import math
+import matplotlib.pyplot as plt
+import time
+class ActivationModule:
+    def __init__(self) :
+        self.activations = None
+        self.histograms = None
+        self.file_path = None
+        self.num_layers = 0
+        self.num_weights = 0
+    def set_init_dict(self , num_layers , num_weights, file_path) :
+        self.num_layers = num_layers
+        self.num_weights = num_weights
+        self.activations = [[[] for id in range(num_weights)] for _ in range(num_layers)]
+        self.histograms= [[{} for id in range(num_weights)] for _ in range(num_layers)]
+        self.file_path = file_path
+        
+    def fd_th(self, weight, sp) :
+        tensor = weight.flatten().cpu().numpy()  # 将张量转换为 NumPy 数组
+        threshold = np.percentile(tensor, q=sp*100)  # 计算分位数
+        return threshold.item()        
 
-BLOCK_NAME = [
-    'q',
-    'k',
-    'v',
-    'o',
-    'gate',
-    'up',
-    'down'
-]
+    def fd_th_by_histogram(self, histogram, sp) :
+        bin_centers = histogram["bin_centers"]
+        counts = histogram["histogram"]  # 使用 histogram 键
 
-MODEL_CONFIGS = {
-    "Llama-2-7B": {
-        "num_layers": 32, "num_weights": 7,
-        "pred_sizes": [
-            [4096, 4096], [4096, 4096], [4096, 4096], [4096, 4096],
-            [4096, 4096], [4096, 4096], [11008, 11008]
-        ],
-        "attn_inp_prepred_precs": ['0.32', '0.29', '0.89', '0.95', '0.75', '0.95', '0.95', '0.94', '0.94', '0.95', '0.96', '0.95', '0.95', '0.93', '0.94', '0.95', '0.75', '0.93', '0.94', '0.80', '0.92', '0.93', '0.93', '0.93', '0.95', '0.93', '0.94', '0.91', '0.90', '0.86', '0.55'],
-        "mlp_inp_prepred_precs": ['0.32', '0.26', '0.90', '0.97', '0.74', '0.95', '0.95', '0.95', '0.95', '0.95', '0.94', '0.95', '0.93', '0.94', '0.94', '0.92', '0.75', '0.94', '0.95', '0.79', '0.93', '0.93', '0.94', '0.95', '0.92', '0.93', '0.93', '0.90', '0.91', '0.82', '0.44']
-    },
-    "Meta-Llama-3-8B": {
-        "num_layers": 32, "num_weights": 7,
-        "pred_sizes": [
-            [4096, 4096], [4096, 4096], [4096, 4096], [4096, 4096],
-            [4096, 4096], [4096, 4096], [14336, 14336]
-        ],
-        "attn_inp_prepred_precs": ['0.41', '0.45', '0.90', '0.92', '0.92', '0.92', '0.91', '0.91', '0.90', '0.90', '0.86', '0.91', '0.90', '0.90', '0.86', '0.84', '0.91', '0.89', '0.92', '0.90', '0.91', '0.91', '0.92', '0.91', '0.91', '0.89', '0.89', '0.86', '0.82', '0.70', '0.58'],
-        "mlp_inp_prepred_precs": ['0.29', '0.32', '0.94', '0.92', '0.91', '0.90', '0.89', '0.91', '0.90', '0.91', '0.85', '0.91', '0.91', '0.88', '0.88', '0.83', '0.89', '0.88', '0.90', '0.90', '0.90', '0.91', '0.89', '0.91', '0.91', '0.89', '0.88', '0.84', '0.75', '0.70', '0.57']
-    },
-    "Meta-Llama-3.1-8B": {
-        "num_layers": 32, "num_weights": 7,
-        "pred_sizes": [
-            [4096, 4096], [4096, 4096], [4096, 4096], [4096, 4096],
-            [4096, 4096], [4096, 4096], [14336, 14336]
-        ],
-        "attn_inp_prepred_precs": ['0.40', '0.44', '0.86', '0.93', '0.94', '0.92', '0.92', '0.93', '0.91', '0.92', '0.86', '0.92', '0.93', '0.90', '0.90', '0.88', '0.92', '0.90', '0.92', '0.92', '0.94', '0.92', '0.92', '0.93', '0.92', '0.91', '0.91', '0.87', '0.85', '0.71', '0.57'],
-        "mlp_inp_prepred_precs": ['0.30', '0.29', '0.95', '0.93', '0.93', '0.91', '0.91', '0.92', '0.92', '0.92', '0.87', '0.93', '0.94', '0.90', '0.90', '0.85', '0.90', '0.89', '0.90', '0.92', '0.92', '0.94', '0.92', '0.93', '0.91', '0.91', '0.89', '0.85', '0.78', '0.70', '0.55']
-    },
-    "Llama-2-13b": {
-        "num_layers": 40, "num_weights": 7,
-        "pred_sizes": [
-            [5120, 5120], [5120, 5120], [5120, 5120], [5120, 5120],
-            [5120, 5120], [5120, 5120], [13824, 13824]
-        ],
-        "attn_inp_prepred_precs": ['0.28', '0.53', '0.68', '0.26', '0.95', '0.91', '0.90', '0.60', '0.92', '0.94', '0.94', '0.93', '0.93', '0.93', '0.91', '0.91', '0.91', '0.87', '0.94', '0.93', '0.90', '0.80', '0.79', '0.90', '0.93', '0.80', '0.92', '0.93', '0.94', '0.94', '0.92', '0.93', '0.90', '0.92', '0.91', '0.91', '0.89', '0.73', '0.46'],
-        "mlp_inp_prepred_precs": ['0.37', '0.56', '0.32', '0.25', '0.95', '0.92', '0.89', '0.60', '0.91', '0.92', '0.93', '0.93', '0.92', '0.93', '0.90', '0.90', '0.91', '0.88', '0.93', '0.93', '0.89', '0.80', '0.78', '0.92', '0.94', '0.81', '0.92', '0.93', '0.93', '0.93', '0.93', '0.93', '0.89', '0.93', '0.88', '0.91', '0.86', '0.72', '0.30']
-    },
-    "Mixtral-8x7B": {
-        "num_layers": 32, "num_weights": 29,
-        "pred_sizes": [
-            [4096, 4096], [4096, 4096], [4096, 4096], [4096, 4096],
-            [4096, 4096], [4096, 4096], [14336, 14336],
-            [4096, 4096], [4096, 4096], [14336, 14336],
-            [4096, 4096], [4096, 4096], [14336, 14336],
-            [4096, 4096], [4096, 4096], [14336, 14336],
-            [4096, 4096], [4096, 4096], [14336, 14336],
-            [4096, 4096], [4096, 4096], [14336, 14336],
-            [4096, 4096], [4096, 4096], [14336, 14336],
-            [4096, 4096], [4096, 4096], [14336, 14336],
-            [4096, 4096]
-        ]},
-    "Llama-2-70b": {
-        "num_layers": 80, "num_weights": 7,
-        "pred_sizes": [
-            [8192, 8192], [8192, 8192], [8192, 8192], [8192, 8192],
-            [8192, 8192], [8192, 8192], [28672, 28672]
-        ],
-        "attn_inp_prepred_precs": ['0.50', '0.46', '0.32', '0.94', '0.92', '0.93', '0.90', '0.72', '0.43', '0.96', '0.96', '0.95', '0.96', '0.97', '0.97', '0.95', '0.96', '0.96', '0.85', '0.92', '0.95', '0.97', '0.96', '0.94', '0.93', '0.95', '0.95', '0.96', '0.97', '0.97', '0.96', '0.96', '0.94', '0.95', '0.96', '0.96', '0.96', '0.95', '0.84', '0.95', '0.95', '0.95', '0.96', '0.94', '0.94', '0.91', '0.96', '0.95', '0.95', '0.96', '0.96', '0.96', '0.97', '0.96', '0.97', '0.96', '0.98', '0.97', '0.97', '0.97', '0.97', '0.97', '0.97', '0.98', '0.97', '0.97', '0.92', '0.95', '0.97', '0.95', '0.97', '0.97', '0.96', '0.93', '0.93', '0.61', '0.46', '0.48', '0.53'],
-        "mlp_inp_prepred_precs": ['0.50', '0.46', '0.32', '0.94', '0.92', '0.93', '0.90', '0.72', '0.43', '0.96', '0.96', '0.95', '0.96', '0.97', '0.97', '0.95', '0.96', '0.96', '0.85', '0.92', '0.95', '0.97', '0.96', '0.94', '0.93', '0.95', '0.95', '0.96', '0.97', '0.97', '0.96', '0.96', '0.94', '0.95', '0.96', '0.96', '0.96', '0.95', '0.84', '0.95', '0.95', '0.95', '0.96', '0.94', '0.94', '0.91', '0.96', '0.95', '0.95', '0.96', '0.96', '0.96', '0.97', '0.96', '0.97', '0.96', '0.98', '0.97', '0.97', '0.97', '0.97', '0.97', '0.97', '0.98', '0.97', '0.97', '0.92', '0.95', '0.97', '0.95', '0.97', '0.97', '0.96', '0.93', '0.93', '0.61', '0.46', '0.48', '0.53']
-    },
-    "Meta-Llama-3-70B": {
-        "num_layers": 80, "num_weights": 7,
-        "pred_sizes": [
-            [8192, 8192], [8192, 8192], [8192, 8192], [8192, 8192],
-            [8192, 8192], [8192, 8192], [28672, 28672]
-        ],
-        "attn_inp_prepred_precs": ['0.27', '0.84', '0.87', '0.31', '0.90', '0.72', '0.83', '0.73', '0.86', '0.74', '0.89', '0.82', '0.79', '0.87', '0.90', '0.92', '0.95', '0.96', '0.62', '0.92', '0.94', '0.93', '0.93', '0.91', '0.93', '0.91', '0.93', '0.94', '0.94', '0.93', '0.94', '0.93', '0.93', '0.92', '0.92', '0.94', '0.93', '0.95', '0.83', '0.95', '0.95', '0.96', '0.91', '0.96', '0.97', '0.86', '0.97', '0.97', '0.96', '0.97', '0.96', '0.95', '0.96', '0.96', '0.95', '0.97', '0.94', '0.95', '0.96', '0.96', '0.96', '0.96', '0.85', '0.96', '0.96', '0.96', '0.91', '0.96', '0.94', '0.90', '0.83', '0.91', '0.91', '0.88', '0.85', '0.82', '0.74', '0.72', '0.38'],
-        "mlp_inp_prepred_precs": ['0.27', '0.84', '0.87', '0.31', '0.90', '0.72', '0.83', '0.73', '0.86', '0.74', '0.89', '0.82', '0.79', '0.87', '0.90', '0.92', '0.95', '0.96', '0.62', '0.92', '0.94', '0.93', '0.93', '0.91', '0.93', '0.91', '0.93', '0.94', '0.94', '0.93', '0.94', '0.93', '0.93', '0.92', '0.92', '0.94', '0.93', '0.95', '0.83', '0.95', '0.95', '0.96', '0.91', '0.96', '0.97', '0.86', '0.97', '0.97', '0.96', '0.97', '0.96', '0.95', '0.96', '0.96', '0.95', '0.97', '0.94', '0.95', '0.96', '0.96', '0.96', '0.96', '0.85', '0.96', '0.96', '0.96', '0.91', '0.96', '0.94', '0.90', '0.83', '0.91', '0.91', '0.88', '0.85', '0.82', '0.74', '0.72', '0.38']
-    },
-    "Meta-Llama-3.1-70B": {
-        "num_layers": 80, "num_weights": 7,
-        "pred_sizes": [
-            [8192, 8192], [8192, 8192], [8192, 8192], [8192, 8192],
-            [8192, 8192], [8192, 8192], [28672, 28672]
-        ],
-        "attn_inp_prepred_precs": ['0.26', '0.82', '0.83', '0.31', '0.90', '0.69', '0.79', '0.72', '0.85', '0.64', '0.86', '0.81', '0.77', '0.86', '0.89', '0.92', '0.95', '0.96', '0.51', '0.92', '0.93', '0.92', '0.94', '0.92', '0.95', '0.92', '0.93', '0.93', '0.93', '0.93', '0.94', '0.93', '0.93', '0.93', '0.93', '0.94', '0.93', '0.95', '0.81', '0.95', '0.96', '0.98', '0.93', '0.94', '0.97', '0.82', '0.97', '0.98', '0.96', '0.96', '0.96', '0.96', '0.96', '0.97', '0.96', '0.98', '0.94', '0.94', '0.96', '0.97', '0.97', '0.97', '0.86', '0.98', '0.96', '0.97', '0.91', '0.97', '0.95', '0.92', '0.82', '0.92', '0.92', '0.90', '0.85', '0.82', '0.74', '0.78', '0.54'],
-        "mlp_inp_prepred_precs": ['0.26', '0.82', '0.83', '0.31', '0.90', '0.69', '0.79', '0.72', '0.85', '0.64', '0.86', '0.81', '0.77', '0.86', '0.89', '0.92', '0.95', '0.96', '0.51', '0.92', '0.93', '0.92', '0.94', '0.92', '0.95', '0.92', '0.93', '0.93', '0.93', '0.93', '0.94', '0.93', '0.93', '0.93', '0.93', '0.94', '0.93', '0.95', '0.81', '0.95', '0.96', '0.98', '0.93', '0.94', '0.97', '0.82', '0.97', '0.98', '0.96', '0.96', '0.96', '0.96', '0.96', '0.97', '0.96', '0.98', '0.94', '0.94', '0.96', '0.97', '0.97', '0.97', '0.86', '0.98', '0.96', '0.97', '0.91', '0.97', '0.95', '0.92', '0.82', '0.92', '0.92', '0.90', '0.85', '0.82', '0.74', '0.78', '0.54']
-    },
-    "Phi-3.5": {
-        "num_layers": 32, "num_weights": 4,
-        "pred_sizes": [
-            [3072, 3072], [3072, 3072], [3072, 3072], [8192, 8192]
-        ],
-        "attn_inp_prepred_precs": ['0.37', '0.59', '0.33', '0.48', '0.55', '0.49', '0.54', '0.57', '0.59', '0.63', '0.61', '0.68', '0.62', '0.69', '0.65', '0.71', '0.71', '0.69', '0.69', '0.73', '0.70', '0.70', '0.72', '0.75', '0.74', '0.71', '0.79', '0.80', '0.73', '0.75', '0.76'],
-        "mlp_inp_prepred_precs": ['0.47', '0.36', '0.49', '0.56', '0.47', '0.51', '0.57', '0.59', '0.60', '0.61', '0.63', '0.65', '0.63', '0.66', '0.69', '0.69', '0.70', '0.67', '0.68', '0.70', '0.68', '0.69', '0.74', '0.76', '0.72', '0.78', '0.80', '0.74', '0.73', '0.79', '0.69']
-    },
-}
+        # 计算累积分布
+        cumulative_counts = torch.cumsum(counts, dim=0)
+        total_count = cumulative_counts[-1]
 
+        # 找到满足稀疏性比例 sp 的阈值
+        target_count = (1 - sp) * total_count
+        idx = torch.searchsorted(cumulative_counts, target_count)
 
-def score_to_mask(score, sparsity_ratio):
-    if len(score.shape) == 1:
-        score = score.view(1, -1)
-    indices = score.argsort(dim=-1, descending=True, stable=True)
-    indices = indices[:, :int(indices.size()[-1] * (1.0 - sparsity_ratio))]
-    #print(indices.shape)
-    mask = torch.zeros_like(score)
-    mask.scatter_(1, indices, 1)
-    return mask
+        if idx == 0:
+            threshold = bin_centers[0]
+        elif idx == len(bin_centers):
+            threshold = bin_centers[-1]
+        else:
+            lower_count = cumulative_counts[idx - 1]
+            upper_count = cumulative_counts[idx]
+            lower_value = bin_centers[idx - 1]
+            upper_value = bin_centers[idx]
 
+            fraction = (target_count - lower_count) / (upper_count - lower_count)
+            threshold = lower_value + fraction * (upper_value - lower_value)
+        return threshold.item()
 
-def calc_sparsity(inp):
-    return (inp.numel() - inp.count_nonzero()) / inp.numel()
+    def cal_histograms(self, activations):
+        flattened_activations = activations.flatten().detach().to('cuda')
 
+        acts = torch.sort(flattened_activations)[0]
+
+        lower_bound = acts[int(0.01 * len(acts))]
+        upper_bound = acts[int(0.99 * len(acts))]
+        filtered_activations = flattened_activations[
+            (flattened_activations >= lower_bound) & (flattened_activations <= upper_bound)
+        ]
+
+        bins = 1000
+
+        histogram, bin_edges = np.histogram(filtered_activations.cpu().numpy(), bins=bins)
+        bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
+
+        return histogram, bin_edges, bin_centers
+
+    def visualize_histogram(self, layer_idx, weight_idx):
+        histograms_path = os.path.join(self.file_path, f"layer_{layer_idx}", f"weight_{weight_idx}", "histograms.pt")
+
+        # 加载直方图数据
+        histogram_data = torch.load(histograms_path, map_location='cpu')
+        histogram, bin_edges, bin_centers = histogram_data['histogram'], histogram_data['bin_edges'], histogram_data['bin_centers']
+
+        plt.figure(figsize=(8, 6))
+        plt.bar(bin_centers, histogram, width=(bin_edges[-1] - bin_edges[0]) / len(bin_edges), alpha=0.7, color='blue')
+        plt.xlabel("Value")
+        plt.ylabel("Frequency")
+        plt.title(f"Histogram for Layer {layer_idx}, Weight {weight_idx}")
+
+        # 先保存再显示
+        plt.savefig(os.path.join(self.file_path, f"layer_{layer_idx}", f"weight_{weight_idx}", "histograms.png"))
+        plt.show()
+
+    
+    def save_layer_weight(self, layer_idx, weight_idx) :
+        if not self.activations[layer_idx][weight_idx]:
+            print('None', self.activations[layer_idx][weight_idx])
+            return 
+        else :   
+            layer_path = os.path.join(self.file_path, f"layer_{layer_idx}", f"weight_{weight_idx}")
+            os.makedirs(layer_path, exist_ok=True)
+
+            activations_path = os.path.join(layer_path, "activations.pt")
+            combine_activations = torch.cat(self.activations[layer_idx][weight_idx], dim=0)
+            torch.save(combine_activations, activations_path)
+
+            histograms_path = os.path.join(layer_path, "histograms.pt")
+            histogram, bin_edges, bin_centers = self.cal_histograms(combine_activations)
+            # print({'histogram': histogram, 'bin_edges': bin_edges, 'bin_centers': bin_centers})
+            torch.save({'histogram': histogram, 'bin_edges': bin_edges, 'bin_centers': bin_centers}, histograms_path)
+
+    def clear_layer_weight(self, layer_idx, weight_idx) :
+        print('clear', layer_idx, weight_idx)
+        self.activations[layer_idx][weight_idx] = []
+        
+    def grab_activations(self, x, layer_idx, weight_idx):
+        if x.size(1) > 1:  # Check if seq_len > 1
+            print('grab ', layer_idx, weight_idx, x.size())
+            self.activations[layer_idx][weight_idx].append(x.detach().squeeze(0).cpu().float())
+            
+            start_time = time.time() 
+            self.save_layer_weight(layer_idx, weight_idx)
+            self.clear_layer_weight(layer_idx, weight_idx)
+            # 可视化直方图
+            self.visualize_histogram(layer_idx, weight_idx)
+            visualize_time = time.time() - start_time  
+            
+            print(f"visualize_histogram ({layer_idx}, {weight_idx}) took {visualize_time:.6f} seconds")
+    
+    def save_activations(self):
+        for layer_idx in range(self.num_layers):
+            for weight_idx in range(self.num_weights) :
+                self.save_layer_weight(layer_idx, weight_idx)
+
+    def load_activations(self):
+        self.activations = [[[] for _ in range(self.num_weights)] for _ in range(self.num_layers)]
+        self.histograms = [[{} for _ in range(self.num_weights)] for _ in range(self.num_layers)]
+
+        for layer_idx in range(self.num_layers):
+            for weight_idx in range(self.num_weights):
+                layer_path = os.path.join(self.file_path, f"layer_{layer_idx}", f"weight_{weight_idx}")
+                
+                activations_path = os.path.join(layer_path, "activations.pt")
+                if os.path.exists(activations_path):
+                    self.activations[layer_idx][weight_idx] = torch.load(activations_path)
+                    
+                histograms_path = os.path.join(layer_path, "histograms.pt")
+                if os.path.exists(histograms_path):
+                    self.histograms[layer_idx][weight_idx] = torch.load(histograms_path)
+    
+    def find_threshold(self, sp, output_path):
+        thresholds = {}
+        for layer_idx in range(self.num_layers):
+            layer_thresholds = {}
+            for weight_idx in range(self.num_weights):
+                layer_path = os.path.join(self.file_path, f"layer_{layer_idx}", f"weight_{weight_idx}")
+                activations_path = os.path.join(layer_path, "activations.pt")
+                
+                if not os.path.exists(activations_path):
+                    continue
+
+                weight = torch.load(activations_path)
+                threshold = self.fd_th(torch.abs(weight), sp)
+                layer_thresholds[weight_idx]=threshold
+                print('find_threshold:  ', layer_idx, weight_idx, threshold)                
+                
+                del weight
+                
+                
+            thresholds[layer_idx]=layer_thresholds
+
+        # Save thresholds to output_path
+        os.makedirs(output_path, exist_ok=True)
+        save_path = os.path.join(output_path, f"sparse-{sp}.json")
+        with open(save_path,'w') as f:
+            json.dump(thresholds, f)
+        # print(thresholds)
+        # torch.save(thresholds, )
+        return thresholds
+        
 class STEFunction(torch.autograd.Function):
     """
     Straight-Through Estimator (STE) for the backward pass.
@@ -135,97 +190,70 @@ class STEFunction(torch.autograd.Function):
         return grad_output, None  # Return gradient for input and None for mask
 
 class WeightPredictor(object):
-    def __init__(self, model_name, dataset_name, dtype=torch.float32, device=torch.device("cuda:0"), D=1024):
+    def __init__(self, model_name='Meta-Llama-3-8B', dtype=torch.float32, device=torch.device("cuda:0"), D=1024):
         self.model_name = model_name
-        self.dataset_name = dataset_name
         self.dtype = dtype
         self.device = device
-        self.D = D
         self.sparsity_strategy = 'Dynamic'
-        self.num_layers = MODEL_CONFIGS[model_name]["num_layers"]
-        self.num_weights = MODEL_CONFIGS[model_name]["num_weights"]
-        self.pred_sizes = MODEL_CONFIGS[model_name]["pred_sizes"]
+        
+        self.num_layers = 0
+        self.num_weights = 0
+        self.weight_counters = []
+        self.weight_maps = {}
+
+        self.DO_CAL_ACTIVATIONS = False
+        self.activations = ActivationModule()
+
+        self.sparse_params = [0,0]
+        
         self.reset()
-        print(f"Init sparsity: attn {self.attn_sp}, mlp {self.mlp_sp}, w {self.w_p}")
+        
     def reset(self) :
         print('Init Reset')
         self.attn_sp = 0.0
         self.mlp_sp = 0.0
         self.w_p = 0.0
-        self.predictors = []
-        self.preds = []
-        self.wmetrics = []
-        self.sparsity_accum = [0.0, 0.0]
-        self.threshold = [[0.0] * 7 for _ in range(self.num_layers)]
+        self.threshold = [[0.0] * self.weight_counters[_] for _ in range(self.num_layers)]
         self.do_pre_prediction = 0
-        self.attn_inp_prepred_precs = None
-        self.mlp_inp_prepred_precs = None
-        self.similarity_results = []
-        for ilayer in range(self.num_layers):
-            self.predictors.append([])
-            self.preds.append([])
-            self.wmetrics.append([])
-            self.similarity_results.append([])
-            for iweight in range(self.num_weights):
-                self.predictors[-1].append(None)
-                self.preds[-1].append(None)
-                self.wmetrics[-1].append(None)
-                self.similarity_results[-1].append([])
 
+        # CROSS_LAYER_TEST
+        self.preds = [[None for _ in range(self.weight_counters[layer_id])] for layer_id in range(self.num_layers)]
+        self.wmetrics = [[None for _ in range(self.weight_counters[layer_id])] for layer_id in range(self.num_layers)]
+        self.similarity_results = [[] * self.weight_counters[_] for _ in range(self.num_layers)]
+
+    def set_cal_activations(self, file_path) :
+        print('set activations', self.num_layers,self.num_weights)
+        self.DO_CAL_ACTIVATIONS = True
+        self.activations.set_init_dict(self.num_layers, self.num_weights, file_path)
+        
     def to_fp16(self):
         self.dtype = torch.float16
-        for ilayer in range(1, self.num_layers) :
-            for iweight in range(self.num_weights):
-                predictor_model = self.predictors[ilayer][iweight]
-                if self.predictors[ilayer][iweight] is not None:
-                    self.predictors[ilayer][iweight] = predictor_model.to(torch.float16)
 
     def to_bf16(self):
         self.dtype = torch.bfloat16
-        for ilayer in range(1, self.num_layers):
-            for iweight in range(self.num_weights):
-                predictor_model = self.predictors[ilayer][iweight]
-                if predictor_model is not None:
-                    self.predictors[ilayer][iweight] = predictor_model.to(torch.bfloat16)
-
-    def get_module_list(self):
-        modules = []
-        for ilayer in range(1, self.num_layers):
-            for iweight in range(self.num_weights):
-                predictor_model = self.predictors[ilayer][iweight]
-                modules.append(predictor_model)
-        return modules
-
-    def predict(self, ilayer, iweight, x, prob_threshold=0.5):
-        #print(f"Predict: ilayer {ilayer}, iweight {iweight}")
-        if ilayer >= self.num_layers:
-            return None
-        predictor_model = self.predictors[ilayer][iweight]
-        logits = predictor_model(x.to(self.dtype).to(self.device))
-        probs = logits.sigmoid()
-        preds = probs >= prob_threshold
-        self.preds[ilayer][iweight].data = preds.data
-        return preds
-
+        
     def set_sparsity_threshold(self, file_path=None) :
         if file_path == None :
             file_path = os.environ.get('THRESHOLD_PATH',None)
         if file_path == None : 
             print('there is none this file.')
-        #     file_path = f'./threshold/{self.model_name}/{self.model_name}-{self.get_attn_sp()}.txt'
+        #     file_path = f'./threshold/{self.model_name}/{self.model_name}-{self.attn_sp}.txt'
         print('threshold_path', file_path)
-        self.threshold = [[0.0] * 7 for _ in range(self.num_layers)]  # 7 个阈值：q, k, v, o, gate, up, down
+        self.threshold = [[0.0] * self.num_weights for _ in range(self.num_layers)] 
         if os.path.exists(file_path):
             with open(file_path, 'r') as f:
                 sparsity_all_dict = json.load(f)
+                
             for i in range(self.num_layers):
                 layer_key = f"{i}"
                 if layer_key in sparsity_all_dict:
                     layer_thresholds = sparsity_all_dict[layer_key]
-                    # 按顺序加载 q, k, v, o, gate, up, down
-                    for j in range(7) :
-                        self.threshold[i][j] = layer_thresholds.get(BLOCK_NAME[j], 0.0)
+                    for j in range(self.num_weights) :
+                        self.threshold[i][j] = layer_thresholds.get(f"{j}", 0.0)
+                        
             self.sparsity_strategy = 'Static'
+            
+            # print(self.threshold)
         else:
             self.sparsity_strategy = 'Dynamic'
         print('sparsity_strategy : ', self.sparsity_strategy)
@@ -241,7 +269,7 @@ class WeightPredictor(object):
             raise ValueError("Length of x shape must be 2 or 3")
         a = thres
 
-        # 根据 sparsity_strategy 选择不同的阈值计算策略
+        # choose threshold
         if self.sparsity_strategy == 'Dynamic':
             thres = a
         elif self.sparsity_strategy == 'Static':
@@ -255,50 +283,32 @@ class WeightPredictor(object):
         else:
             thres = b
 
+        # all activation in layer 0
         r = os.environ.get('ACTIVATE_LAYER' , '0') 
-        if ilayer >= 0 and ilayer <= int(r): # all activation in layer 0
+        if ilayer >= 0 and ilayer <= int(r): 
             # print('YES')
             mask = x >= 0 
         else :
             mask =  x >= thres
         mask = mask.to(torch.int64)
 
-        # 计算稀疏系数 C
-        if mask.sum() > 0:  # 确保分母不为零
-            sum_all = x.sum()  # x 的全部元素和
-            sum_masked = (x * mask).sum()  # mask 中为 1 的位置对应的 x 的和
-            C = sum_all / sum_masked  # 稀疏系数 C
+        # compute sparse param C
+        if mask.sum() > 0:  
+            sum_all = x.sum()
+            sum_masked = (x * mask).sum() 
+            C = sum_all / sum_masked
         else:
-            C = 1.0  # 如果 mask 中没有激活值，为了避免除零，设置 C 为 1
+            C = 1.0 
 
         return mask, C
 
-    def combine_mask(self, x_mask, w_mask):
-        m = x_mask + w_mask[0]
-        m = m > 0
-        m = m.to(torch.int64)
-        return m
-
-    def predict_by_x_thres(self, ilayer, iweight, x, sp, w_mask_p=-1.0):
-        # print('predict_by_x_thres', ilayer, iweight , sp ,w_mask_p)
-
-        if ilayer >= self.num_layers:
-            return None
-
-        # out_preds = self.preds[ilayer][iweight] if self.preds[ilayer][iweight] is not None else None
-        out_preds = None
-
-
+    def predict_by_x_thres(self, ilayer, iweight, x):
+        # print('predict' , ilayer , iweight)
+        sp = self.attn_sp
         # Prediction.
         x = x.abs()
         threshold = self.threshold[ilayer][iweight]
         preds, C = self.score_to_mask(x, sp, threshold, ilayer)
-            
-        # sparsity_params
-        preds_sp = calc_sparsity(preds).item()
-        if not math.isnan(preds_sp):
-            self.sparsity_accum[0] += preds_sp
-            self.sparsity_accum[1] += 1
        
         # predictor
         if self.do_pre_prediction:
@@ -317,161 +327,37 @@ class WeightPredictor(object):
                     self.preds[ilayer - 1][iweight] = None # Clear
                 else :
                     pass
-            # prec = 0.0
-            # if iweight in [0, 1, 2]:
-            #     prec = float(self.attn_inp_prepred_precs[ilayer])
-            # elif iweight in [4, 5]:
-            #     prec = float(self.mlp_inp_prepred_precs[ilayer])
 
-            # if prec > 0.7:
-            #     self.preds[ilayer + 1][iweight] = preds
-        return out_preds if out_preds is not None else preds, C
-
-    # def predict_heads(self, ilayer, iweight, x, head_dim, head_percent=0.5):
-    #     #print(f"Predict: ilayer {ilayer}, iweight {iweight}")
-    #     if ilayer >= self.num_layers:
-    #         return None
-    #     predictor_model = self.predictors[ilayer][iweight]
-    #     logits = predictor_model(x.to(self.dtype).to(self.device))
-    #     bsz, q_len, hidden_size = x.size()
-    #     num_heads = hidden_size // head_dim
-    #     logits = logits.reshape(bsz, q_len, num_heads, head_dim)
-    #     logits = logits[0, -1].sum(dim=-1)
-    #     logit_indices = logits.argsort(dim=-1)
-    #     preds = torch.zeros((1, num_heads, head_dim), dtype=torch.int64, device=self.device)
-    #     for i in range(int(num_heads * (1.0 - head_percent)), num_heads):
-    #         ihead = logit_indices[i]
-    #         preds.data[0, ihead] = 1
-    #     preds = preds.reshape(1, num_heads * head_dim)
-    #     #print(f"x {x}")
-    #     #print(f"preds {preds}")
-    #     #preds = preds.to(torch.int64)
-    #     self.preds[ilayer][iweight].data = preds.data
-    #     return preds
-
-    def get_pred(self, ilayer, iweight):
-        #if ilayer == 0:
-        #    return None
-        return self.preds[ilayer][iweight]
+        return preds, C
 
     def apply_pred(self, x, pred=None):
-        if pred is None:
-            return x
-        return x * pred.to(x.dtype).to(x.device)
+        return x if pred is None else x * pred.to(x.dtype).to(x.device)
     
-    def generate_pred(self, ilayer, iweight, x, sp=None) :
-        if sp == None :
-            sp = self.attn_sp if iweight < 4 else self.mlp_sp
+    def generate_pred(self, ilayer, iweight, x) :
+        # print('grab ', ilayer, iweight, x.size())
+        if self.DO_CAL_ACTIVATIONS == True:
+            self.activations.grab_activations(x, ilayer, iweight)
+        if is_sparse_infer() == False:
+            return x
         else :
-            sp = sp
-        pred, C = self.predict_by_x_thres(ilayer, iweight, x, sp, self.get_w_p())
+            pred, C = self.predict_by_x_thres(ilayer, iweight, x)
+            if os.environ.get('DEBUG_CROSSLAYER','0') != '0' :
+                # 统计 pred 中零值的数量和总元素数量
+                total_elements = pred.numel()
+                zero_elements = (pred == 0).sum().item()
 
-        # print(pred)
-        if os.environ.get('DEBUG_CROSSLAYER','0') != '0' :
-            pass
-            # if self.wmetrics[ilayer][iweight] == None :
-            #     self.wmetrics[ilayer][iweight] = torch.zeros(pred.size(-1), device='cpu')
+                # update self.sparse_params
+                self.sparse_params[0] += total_elements
+                self.sparse_params[1] += zero_elements
 
-            # # 将 pred 转移到 CPU
-            # pred1 = pred.to('cpu')
+                # zero_ratio = zero_elements / total_elements
+                # print(f"Layer {ilayer}, Weight {iweight}: Zero ratio in pred = {zero_ratio:.4f}")
 
-            # # 更新 wmetric
-            # compressed_pred = pred1.sum(dim=1).sum(dim=0)  # 或者使用 sum: pred1.sum(dim=1)
 
-            # print(pred1)
-
-            # # 更新 wmetric
-            # self.wmetrics[ilayer][iweight] = self.wmetrics[ilayer][iweight] + compressed_pred
-
-        # print("Sparsity Coefficient (C):", C)
-
-        # # 计算乘/不乘 C 后的预测结果
-        if os.environ.get('DEBUG_CROSSLAYER','0') != '0' :
-            print('Attention_QKV', C, ilayer , iweight)
-            if os.environ.get('BACKWARD_STRATEGY', '0') != '0':
-                output_with_C = self.apply_pred(x * C, pred)
-                output_without_C = self.apply_pred(x, pred)
-            else:
-                output_with_C = STEFunction.apply(x * C, pred)
-                output_without_C = STEFunction.apply(x, pred)
-
-            # 计算差异性指标
-            diff_l1 = torch.norm(x - output_without_C, p=1)  # L1 范数
-            diff_l2 = torch.norm(x - output_without_C, p=2)  # L2 范数
-            mse = torch.mean((x - output_without_C) ** 2)    # 均方误差
-
-            # 打印差异性指标
-            print(f"L1 difference between output_with_C and output_without_C: {diff_l1.item()}")
-            print(f"L2 difference between output_with_C and output_without_C: {diff_l2.item()}")
-            print(f"MSE between output_with_C and output_without_C: {mse.item()}")
-
-        if os.environ.get('BACKWARD_STRATEGY','0') != '0' :
-            return self.apply_pred(x, pred)
-        else : 
-            if iweight <= 2 and False:
-                return STEFunction.apply(x * C, pred)
-            else :
+            if os.environ.get('BACKWARD_STRATEGY','0') != '0' :
+                return self.apply_pred(x, pred)
+            else : 
                 return STEFunction.apply(x, pred)
-    # a->b(sparse)->c  a to b sparse b to c 实际的M
-
-    def eval(self, ilayer, iweight, x, y, sparsity_ratio):
-        #pred = self.get_pred(ilayer, iweight)
-        pred = None
-        if ilayer > 0:
-            predictor_model = self.predictors[ilayer][iweight]
-            logits = predictor_model(x)
-            probs = logits.sigmoid()
-            prob_threshold = 0.20
-            pred = probs >= prob_threshold
-            pred = pred.to(torch.int64)
-
-        if pred is None:
-            return {"accuracy": 0, "precision": 0, "recall": 0}
-        y = score_to_mask(y, sparsity_ratio)
-        dif = y.int() - pred.int()
-        false_pos = dif > 0.0
-        false_neg = dif < 0.0
-        total = torch.ones_like(y).sum(dim=1).float()
-        pos = y.sum(dim=1).float()
-        neg = total - pos
-        false_pos = false_pos.sum(dim=1).float()
-        true_pos = pos - false_pos
-        false_neg = false_neg.sum(dim=1).float()
-        true_neg = neg - false_neg
-        if True:
-            print(f"probs: {probs}")
-            print(f"dif: {dif}")
-            false_pos_mask = (dif > 0.0)
-            false_neg_mask = (dif < 0.0)
-            false_pos_probs = probs[false_pos_mask]
-            false_neg_probs = probs[false_neg_mask]
-            print(f"false_pos_mask: {false_pos_mask}")
-            print(f"false_neg_mask: {false_neg_mask}")
-            print(f"false_pos_probs: {false_pos_probs}")
-            print(f"false_neg_probs: {false_neg_probs}")
-        accuracy = ((true_pos + true_neg) / total).mean().item()
-        precision = ((true_pos) / pos).mean().item()
-        recall = ((true_pos) / (true_pos + false_neg)).mean().item()
-        true_wratio = ((pos / total).mean().item())
-        pred_wratio = ((true_pos + false_neg) / total).mean().item()
-        print(f"ilayer {ilayer}, iweight {iweight}, accuracy {accuracy:.4f}" + \
-            f", precision {precision:.4f}, recall {recall:.4f}" + \
-            f", true_wratio {true_wratio:.4f}, pred_wratio {pred_wratio:.4f}")
-        return {"accuracy": accuracy, "precision": precision, "recall": recall}
-
-    def print_weight(self):
-        predictor_model = self.predictors[-1][-1]
-        for param in predictor_model.parameters():
-            print(param)
-
-    def get_attn_sp(self):
-        return self.attn_sp
-
-    def get_mlp_sp(self):
-        return self.mlp_sp
-
-    def get_w_p(self):
-        return self.w_p
 
     def set_sp_config(self, attn_sp, mlp_sp, w_p):
         self.attn_sp = attn_sp
@@ -481,29 +367,22 @@ class WeightPredictor(object):
 
     def set_do_pre_prediction(self, do_pre_prediction):
         self.do_pre_prediction = do_pre_prediction
-        if self.do_pre_prediction:
-            self.attn_inp_prepred_precs = MODEL_CONFIGS[self.model_name]["attn_inp_prepred_precs"]
-            self.mlp_inp_prepred_precs = MODEL_CONFIGS[self.model_name]["mlp_inp_prepred_precs"]
         print(f"Set pre-prediction: {self.do_pre_prediction}")
 
-    def get_avg_sparsity(self):
-        if self.sparsity_accum[1] > 0:
-            return self.sparsity_accum[0] * 1.0 / self.sparsity_accum[1]
-        else:
-            return -1
     def set_sparsity_strategy(self, method: str) :
         self.sparsity_strategy = method
         print('sparsity_strategy: ', method)
 
+    def set_layers_and_weights(self, num_layers , weight_counters, weight_map) :
+        self.num_layers = num_layers
+        self.num_weights = weight_counters[0]
+        self.weight_counters = weight_counters
+        self.weight_map = weight_map
+        print('num_layers', self.num_layers)
+        print('weight_counters', self.weight_counters)
+        self.reset()
 
 global_weight_preditor = None
-global_attn_prob_threshold = 0.5
-global_mlp_prob_threshold = 0.5
-global_attn_sp = 0.5
-global_mlp_sp = 0.8
-global_w_mask_p = 0.0
-global_enable_attention_predictor = True
-
 
 def is_weight_predictor_enabled():
     return os.environ.get("ENABLE_PREDICTOR", "0") == "1"
@@ -511,36 +390,25 @@ def is_weight_predictor_enabled():
 def is_sparse_infer():
     return os.environ.get("ENABLE_SPARSE_INFER", "0") == "1"
 
-def _init_weight_predictor():
+def _init_weight_predictor(model_name=None):
     global global_weight_preditor
-    global MODEL_CONFIGS
     if global_weight_preditor is not None:
         raise KeyError('global_weight_preditor')
-    model_name = os.environ["MODEL_NAME"]
-    for config in MODEL_CONFIGS :
-        if config.lower() in model_name.lower():
-            model_name = config
-            break
-    print(model_name)
-    dataset_name = "c4"
+    
     dtype = torch.float32
     local_rank = os.environ.get("LOCAL_RANK","-1")
+
     if local_rank != "-1":
         device = torch.device(f"cuda:{local_rank}")
     else:
         device = torch.device("cuda:0")
     
-    D = 1024
     print("Create and load preditor...")
     print("Local device:", device)
     # print("Checkpoint dir:", checkpoint_dir)
-    global_weight_preditor = WeightPredictor(
-        model_name, dataset_name=dataset_name, dtype=dtype, device=device, D=D
-    )
-    if local_rank != "-1":
-        global_weight_preditor.to_bf16()
-    else:
-        global_weight_preditor.to_bf16()
+    global_weight_preditor = WeightPredictor(model_name, dtype=dtype, device=device,)
+    global_weight_preditor.to_bf16()
+    return global_weight_preditor
 
 
 if is_weight_predictor_enabled():

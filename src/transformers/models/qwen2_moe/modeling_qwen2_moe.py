@@ -26,12 +26,6 @@ from typing import List, Optional, Tuple, Union
 from ...weight_predictor import (
     global_weight_preditor,
     is_sparse_infer,
-    global_attn_prob_threshold,
-    global_mlp_prob_threshold,
-    global_attn_sp,
-    global_mlp_sp,
-    global_w_mask_p,
-    global_enable_attention_predictor,
 )
 import torch
 import torch.nn.functional as F

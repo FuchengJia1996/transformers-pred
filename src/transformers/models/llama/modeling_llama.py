@@ -50,12 +50,6 @@ from ...utils import (
 from ...weight_predictor import (
     global_weight_preditor,
     is_sparse_infer,
-    global_attn_prob_threshold,
-    global_mlp_prob_threshold,
-    global_attn_sp,
-    global_mlp_sp,
-    global_w_mask_p,
-    global_enable_attention_predictor,
 )
 from ...tensor_saver import global_tensor_saver
 from .configuration_llama import LlamaConfig
@@ -1212,8 +1206,7 @@ class LlamaModel(LlamaPreTrainedModel):
         self.global_weight_preditor = None
         if global_weight_preditor is not None:
             self.global_weight_preditor = global_weight_preditor
-            self.weight_predictors = nn.ModuleList(global_weight_preditor.get_module_list())
-
+        print('global_weight_preditor', self.global_weight_preditor)
         # Initialize weights and apply final processing
         self.post_init()
 

@@ -49,7 +49,7 @@ if TYPE_CHECKING:
     except OptionalDependencyNotAvailable:
         pass
     else:
-        from .modeling_mixtral import (
+        from .modeling_mixtral_pregate import (
             MixtralForCausalLM,
             MixtralForSequenceClassification,
             MixtralForTokenClassification,

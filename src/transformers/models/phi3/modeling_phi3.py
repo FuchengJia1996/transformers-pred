@@ -489,8 +489,9 @@ class Phi3SparseAttention(nn.Module):
         bsz, q_len, _ = hidden_states.size()
 
         if global_weight_preditor is not None and is_sparse_infer():
-            pred = global_weight_preditor.predict_by_x_thres(self.layer_idx, 0, hidden_states, global_weight_preditor.get_attn_sp(), global_weight_preditor.get_w_p())
-            qkv = self.qkv_proj(global_weight_preditor.apply_pred(self.layer_idx, 0, hidden_states, pred))
+            pass
+            # pred = global_weight_preditor.predict_by_x_thres(self.layer_idx, 0, hidden_states, global_weight_preditor.get_attn_sp(), global_weight_preditor.get_w_p())
+            # qkv = self.qkv_proj(global_weight_preditor.apply_pred(self.layer_idx, 0, hidden_states, pred))
         else:
             qkv = self.qkv_proj(hidden_states)
         query_pos = self.num_heads * self.head_dim
