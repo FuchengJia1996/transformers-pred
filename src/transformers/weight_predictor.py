@@ -9,11 +9,14 @@ import matplotlib.pyplot as plt
 import time
 class ActivationModule:
     def __init__(self) :
+        self.visualize_strategy = 1
         self.activations = None
         self.histograms = None
         self.file_path = None
         self.num_layers = 0
         self.num_weights = 0
+    def set_visuable_strategy(self, s=1) :
+        self.visualize_strategy = s
     def set_init_dict(self , num_layers , num_weights, file_path) :
         self.num_layers = num_layers
         self.num_weights = num_weights
@@ -86,6 +89,7 @@ class ActivationModule:
         # 先保存再显示
         plt.savefig(os.path.join(self.file_path, f"layer_{layer_idx}", f"weight_{weight_idx}", "histograms.png"))
         plt.show()
+        plt.close() 
 
     
     def save_layer_weight(self, layer_idx, weight_idx) :
@@ -114,14 +118,14 @@ class ActivationModule:
             print('grab ', layer_idx, weight_idx, x.size())
             self.activations[layer_idx][weight_idx].append(x.detach().squeeze(0).cpu().float())
             
-            start_time = time.time() 
             self.save_layer_weight(layer_idx, weight_idx)
             self.clear_layer_weight(layer_idx, weight_idx)
             # 可视化直方图
-            self.visualize_histogram(layer_idx, weight_idx)
-            visualize_time = time.time() - start_time  
-            
-            print(f"visualize_histogram ({layer_idx}, {weight_idx}) took {visualize_time:.6f} seconds")
+            if self.visualize_strategy == 1 :
+                start_time = time.time()
+                self.visualize_histogram(layer_idx, weight_idx)
+                visualize_time = time.time() - start_time  
+                print(f"visualize_histogram ({layer_idx}, {weight_idx}) took {visualize_time:.6f} seconds")
     
     def save_activations(self):
         for layer_idx in range(self.num_layers):
@@ -388,7 +392,8 @@ def is_weight_predictor_enabled():
     return os.environ.get("ENABLE_PREDICTOR", "0") == "1"
 
 def is_sparse_infer():
-    return os.environ.get("ENABLE_SPARSE_INFER", "0") == "1"
+    # return os.environ.get("ENABLE_SPARSE_INFER", "0") == "1"
+    return False
 
 def _init_weight_predictor(model_name=None):
     global global_weight_preditor
