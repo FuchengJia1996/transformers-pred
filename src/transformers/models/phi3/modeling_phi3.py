@@ -259,13 +259,13 @@ class Phi3SparseMLP(nn.Module):
 
     def forward(self, hidden_states: torch.FloatTensor) -> torch.FloatTensor:
         if global_weight_preditor is not None and is_sparse_infer():
-            pred = global_weight_preditor.predict_by_x_thres(self.layer_idx, 2, hidden_states, global_weight_preditor.get_mlp_sp(), global_weight_preditor.get_w_p())
+            pred = global_weight_preditor.predict_by_x_thres(self.layer_idx, 2, hidden_states, global_weight_preditor.get_mlp_sp(), global_weight_preditor.w_p)
             up_states = self.gate_up_proj(global_weight_preditor.apply_pred(self.layer_idx, 2, hidden_states, pred))
 
             gate, up_states = up_states.chunk(2, dim=-1)
             up_states = up_states * self.activation_fn(gate)
 
-            pred = global_weight_preditor.predict_by_x_thres(self.layer_idx, 3, up_states, global_weight_preditor.get_mlp_sp(), global_weight_preditor.get_w_p())
+            pred = global_weight_preditor.predict_by_x_thres(self.layer_idx, 3, up_states, global_weight_preditor.get_mlp_sp(), global_weight_preditor.w_p)
             return self.down_proj(global_weight_preditor.apply_pred(self.layer_idx, 3, up_states, pred))
         else:
             up_states = self.gate_up_proj(hidden_states)
@@ -490,7 +490,7 @@ class Phi3SparseAttention(nn.Module):
 
         if global_weight_preditor is not None and is_sparse_infer():
             pass
-            # pred = global_weight_preditor.predict_by_x_thres(self.layer_idx, 0, hidden_states, global_weight_preditor.get_attn_sp(), global_weight_preditor.get_w_p())
+            # pred = global_weight_preditor.predict_by_x_thres(self.layer_idx, 0, hidden_states, global_weight_preditor.attn_sp, global_weight_preditor.w_p)
             # qkv = self.qkv_proj(global_weight_preditor.apply_pred(self.layer_idx, 0, hidden_states, pred))
         else:
             qkv = self.qkv_proj(hidden_states)
@@ -555,7 +555,7 @@ class Phi3SparseAttention(nn.Module):
         attn_output = attn_output.reshape(bsz, q_len, self.hidden_size)
 
         if global_weight_preditor is not None and is_sparse_infer():
-            pred = global_weight_preditor.predict_by_x_thres(self.layer_idx, 1, attn_output, global_weight_preditor.get_attn_sp(), global_weight_preditor.get_w_p())
+            pred = global_weight_preditor.predict_by_x_thres(self.layer_idx, 1, attn_output, global_weight_preditor.attn_sp, global_weight_preditor.w_p)
             attn_output = self.o_proj(global_weight_preditor.apply_pred(self.layer_idx, 1, attn_output, pred))
         else:
             if global_tensor_saver is not None:

@@ -336,7 +336,7 @@ class MixtralAttention(nn.Module):
         bsz, q_len, _ = hidden_states.size()
 
         if global_weight_preditor is not None and is_sparse_infer():
-            pred = global_weight_preditor.predict_by_x_thres(self.layer_idx, 0, hidden_states, global_weight_preditor.get_attn_sp(), global_weight_preditor.get_w_p())
+            pred = global_weight_preditor.predict_by_x_thres(self.layer_idx, 0, hidden_states, global_weight_preditor.attn_sp, global_weight_preditor.w_sp)
             query_states = self.q_proj(global_weight_preditor.apply_pred(self.layer_idx, 0, hidden_states, pred))
             key_states = self.k_proj(global_weight_preditor.apply_pred(self.layer_idx, 0, hidden_states, pred))
             value_states = self.v_proj(global_weight_preditor.apply_pred(self.layer_idx, 0, hidden_states, pred))
@@ -378,7 +378,7 @@ class MixtralAttention(nn.Module):
             )
 
         if attention_mask is not None:
-            print(f"attn_mask_size {attention_mask.size()}, right_size {(bsz, 1, q_len, kv_seq_len)}")
+            # print(f"attn_mask_size {attention_mask.size()}, right_size {(bsz, 1, q_len, kv_seq_len)}")
             if attention_mask.size() != (bsz, 1, q_len, kv_seq_len):
                 # raise ValueError(
                 #     f"Attention mask should be of size {(bsz, 1, q_len, kv_seq_len)}, but is {attention_mask.size()}"
@@ -403,7 +403,7 @@ class MixtralAttention(nn.Module):
                     raise ValueError("Failed")
                     attention_mask = attention_mask[:,:,:,:kv_seq_len]
                 # attention_mask = attention_mask[bsz,1,q_len,:kv_seq_len]
-            print(f"attention_mask {attention_mask}")
+            # print(f"attention_mask {attention_mask}")
             attn_weights = attn_weights + attention_mask
 
         # upcast attention to fp32
@@ -421,7 +421,7 @@ class MixtralAttention(nn.Module):
         attn_output = attn_output.reshape(bsz, q_len, self.hidden_size)
 
         if global_weight_preditor is not None and is_sparse_infer():
-            pred = global_weight_preditor.predict_by_x_thres(self.layer_idx, 3, attn_output, global_weight_preditor.get_attn_sp(), global_weight_preditor.get_w_p())
+            pred = global_weight_preditor.predict_by_x_thres(self.layer_idx, 3, attn_output, global_weight_preditor.attn_sp, global_weight_preditor.w_p)
             attn_output = self.o_proj(global_weight_preditor.apply_pred(self.layer_idx, 3, attn_output, pred))
         else:
             attn_output = self.o_proj(attn_output)
