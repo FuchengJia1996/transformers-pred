@@ -49,7 +49,6 @@ from ...utils import (
 )
 from ...weight_predictor import (
     global_weight_preditor,
-    is_sparse_infer,
 )
 from ...tensor_saver import global_tensor_saver
 from .configuration_llama import LlamaConfig
@@ -342,7 +341,7 @@ class LlamaSparseMLP(nn.Module):
             ]
             down_proj = sum(down_proj)
         else:
-            if global_weight_preditor is not None and is_sparse_infer():
+            if global_weight_preditor is not None and global_weight_preditor.is_sparse_infer():
                 x_gate = self.gate_proj(global_weight_preditor.generate_pred(self.layer_idx, 4, x))
                 x_up = self.up_proj(global_weight_preditor.generate_pred(self.layer_idx, 5, x))
                 x = self.act_fn(x_gate) * x_up
@@ -609,7 +608,7 @@ class LlamaSparseAttention(nn.Module):
             value_states = torch.cat(value_states, dim=-1)
 
         else:
-            if global_weight_preditor is not None and is_sparse_infer():
+            if global_weight_preditor is not None and global_weight_preditor.is_sparse_infer():
                 query_states = self.q_proj(global_weight_preditor.generate_pred(self.layer_idx, 0, hidden_states))
                 key_states = self.k_proj(global_weight_preditor.generate_pred(self.layer_idx, 1, hidden_states))
                 value_states = self.v_proj(global_weight_preditor.generate_pred(self.layer_idx, 2, hidden_states))
@@ -664,7 +663,7 @@ class LlamaSparseAttention(nn.Module):
             o_proj_slices = self.o_proj.weight.split(self.hidden_size // self.config.pretraining_tp, dim=1)
             attn_output = sum([F.linear(attn_output[i], o_proj_slices[i]) for i in range(self.config.pretraining_tp)])
         else:
-            if global_weight_preditor is not None and is_sparse_infer():
+            if global_weight_preditor is not None and global_weight_preditor.is_sparse_infer():
                 #global_weight_preditor.predict(self.layer_idx + 1, 3, attn_output)
                 #global_weight_preditor.predict_heads(self.layer_idx + 1, 3, attn_output, self.head_dim, head_percent=0.8)
                 attn_output = self.o_proj(global_weight_preditor.generate_pred(self.layer_idx, 3, attn_output))

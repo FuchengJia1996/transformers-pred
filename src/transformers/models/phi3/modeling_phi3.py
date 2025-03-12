@@ -554,7 +554,7 @@ class Phi3SparseAttention(nn.Module):
         attn_output = attn_output.transpose(1, 2).contiguous()
         attn_output = attn_output.reshape(bsz, q_len, self.hidden_size)
 
-        if global_weight_preditor is not None and is_sparse_infer():
+        if global_weight_preditor is not None and global_weight_preditor.is_sparse_infer():
             pred = global_weight_preditor.predict_by_x_thres(self.layer_idx, 1, attn_output, global_weight_preditor.attn_sp, global_weight_preditor.w_p)
             attn_output = self.o_proj(global_weight_preditor.apply_pred(self.layer_idx, 1, attn_output, pred))
         else:

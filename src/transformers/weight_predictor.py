@@ -208,10 +208,15 @@ class WeightPredictor(object):
         self.DO_CAL_ACTIVATIONS = False
         self.activations = ActivationModule()
 
+        self.sparse_infer = 1
         self.sparse_params = [0,0]
         
         self.reset()
-        
+
+    def set_sparse_infer(self, s=1) :
+        self.sparse_infer = s
+    def is_sparse_infer(self) -> bool:
+        return self.sparse_infer
     def reset(self) :
         print('Init Reset')
         self.attn_sp = 0.0
@@ -237,6 +242,7 @@ class WeightPredictor(object):
         self.dtype = torch.bfloat16
         
     def set_sparsity_threshold(self, file_path=None) :
+        print('set_sparsity_threshold')
         if file_path == None :
             file_path = os.environ.get('THRESHOLD_PATH',None)
         if file_path == None : 
@@ -341,7 +347,7 @@ class WeightPredictor(object):
         # print('grab ', ilayer, iweight, x.size())
         if self.DO_CAL_ACTIVATIONS == True:
             self.activations.grab_activations(x, ilayer, iweight)
-        if is_sparse_infer() == False:
+        if self.is_sparse_infer() == False:
             return x
         else :
             pred, C = self.predict_by_x_thres(ilayer, iweight, x)
@@ -388,9 +394,6 @@ class WeightPredictor(object):
 
 global_weight_preditor = None
 
-def is_weight_predictor_enabled():
-    return os.environ.get("ENABLE_PREDICTOR", "0") == "1"
-
 def is_sparse_infer():
     # return os.environ.get("ENABLE_SPARSE_INFER", "0") == "1"
     return False
@@ -415,6 +418,4 @@ def _init_weight_predictor(model_name=None):
     global_weight_preditor.to_bf16()
     return global_weight_preditor
 
-
-if is_weight_predictor_enabled():
-    _init_weight_predictor()
+global_weight_preditor = _init_weight_predictor()

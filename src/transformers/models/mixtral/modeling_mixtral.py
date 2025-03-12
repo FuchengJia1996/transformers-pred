@@ -53,7 +53,6 @@ from ...utils import (
 )
 from ...weight_predictor import (
     global_weight_preditor,
-    is_sparse_infer,
 )
 from ...utils.import_utils import is_torch_fx_available
 from .configuration_mixtral import MixtralConfig
@@ -335,7 +334,7 @@ class MixtralAttention(nn.Module):
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
         bsz, q_len, _ = hidden_states.size()
 
-        if global_weight_preditor is not None and is_sparse_infer():
+        if global_weight_preditor is not None and global_weight_preditor.is_sparse_infer():
             pred = global_weight_preditor.predict_by_x_thres(self.layer_idx, 0, hidden_states, global_weight_preditor.attn_sp, global_weight_preditor.w_sp)
             query_states = self.q_proj(global_weight_preditor.apply_pred(self.layer_idx, 0, hidden_states, pred))
             key_states = self.k_proj(global_weight_preditor.apply_pred(self.layer_idx, 0, hidden_states, pred))
@@ -420,7 +419,7 @@ class MixtralAttention(nn.Module):
         attn_output = attn_output.transpose(1, 2).contiguous()
         attn_output = attn_output.reshape(bsz, q_len, self.hidden_size)
 
-        if global_weight_preditor is not None and is_sparse_infer():
+        if global_weight_preditor is not None and global_weight_preditor.is_sparse_infer():
             pred = global_weight_preditor.predict_by_x_thres(self.layer_idx, 3, attn_output, global_weight_preditor.attn_sp, global_weight_preditor.w_p)
             attn_output = self.o_proj(global_weight_preditor.apply_pred(self.layer_idx, 3, attn_output, pred))
         else:
@@ -835,7 +834,7 @@ class MixtralBlockSparseTop2MLP(nn.Module):
         self.act_fn = ACT2FN[config.hidden_act]
 
     def forward(self, hidden_states):
-        if global_weight_preditor is not None and is_sparse_infer():
+        if global_weight_preditor is not None and global_weight_preditor.is_sparse_infer():
             pred = global_weight_preditor.predict_by_x_thres(
                 self.layer_idx,
                 4 + self.expert_idx * 3,
