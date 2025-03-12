@@ -394,28 +394,19 @@ class WeightPredictor(object):
 
 global_weight_preditor = None
 
-def is_sparse_infer():
-    # return os.environ.get("ENABLE_SPARSE_INFER", "0") == "1"
-    return False
-
-def _init_weight_predictor(model_name=None):
-    global global_weight_preditor
-    if global_weight_preditor is not None:
-        raise KeyError('global_weight_preditor')
+# def _init_weight_predictor(model_name=None):
     
-    dtype = torch.float32
-    local_rank = os.environ.get("LOCAL_RANK","-1")
+#     dtype = torch.float32
+#     local_rank = os.environ.get("LOCAL_RANK","-1")
 
-    if local_rank != "-1":
-        device = torch.device(f"cuda:{local_rank}")
-    else:
-        device = torch.device("cuda:0")
+#     if local_rank != "-1":
+#         device = torch.device(f"cuda:{local_rank}")
+#     else:
+#         device = torch.device("cuda:0")
     
-    print("Create and load preditor...")
-    print("Local device:", device)
-    # print("Checkpoint dir:", checkpoint_dir)
-    global_weight_preditor = WeightPredictor(model_name, dtype=dtype, device=device,)
-    global_weight_preditor.to_bf16()
-    return global_weight_preditor
-
-global_weight_preditor = _init_weight_predictor()
+#     print("Create and load preditor...")
+#     print("Local device:", device)
+#     # print("Checkpoint dir:", checkpoint_dir)
+#     global_weight_preditor = WeightPredictor(model_name, dtype=dtype, device=device,)
+#     global_weight_preditor.to_bf16()
+#     return global_weight_preditor
